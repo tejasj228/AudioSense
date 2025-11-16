@@ -186,29 +186,6 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section id="about" className="about-section">
-          <div className="about-card">
-            <h2>Designed for Precision</h2>
-            <p>
-              AudioSense merges deep learning with human-centric design,
-              offering a serene workflow for engineers, artists, and creators.
-              Every interaction feels intentional, every insight distilled.
-            </p>
-            <div className="about-meta">
-              <div>
-                <span className="meta-title">Realtime Engine</span>
-                <p>Low-latency analysis built on GPU acceleration.</p>
-              </div>
-              <div>
-                <span className="meta-title">Collaborative Cloud</span>
-                <p>Share sessions, annotate insights, and iterate effortlessly.</p>
-              </div>
-            </div>
-            <a className="primary-btn subtle" href="#analyze">
-              Begin with AudioSense
-            </a>
-          </div>
-        </section>
       </main>
       <footer className="footer">
         <span>© {new Date().getFullYear()} AudioSense Labs</span>
