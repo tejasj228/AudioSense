@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Python Backend</title>
+</head>
+<body>
+    <h1>Test Audio Visualization Backend</h1>
+    <input type="file" id="audioFile" accept="audio/*">
+    <button onclick="testBackend()">Test Upload</button>
+    <div id="result"></div>
+
+    <script>
+        async function testBackend() {
+            const fileInput = document.getElementById('audioFile');
+            const resultDiv = document.getElementById('result');
+            
+            if (!fileInput.files[0]) {
+                resultDiv.innerHTML = '<p style="color: red;">Please select a file first!</p>';
+                return;
+            }
+
+            resultDiv.innerHTML = '<p>Uploading...</p>';
+
+            try {
+                const formData = new FormData();
+                formData.append('audio', fileInput.files[0]);
+
+                console.log('Sending request to http://localhost:5000/api/visualize');
+                
+                const response = await fetch('http://localhost:5000/api/visualize', {
+                    method: 'POST',
+                    body: formData,
+                    mode: 'cors'
+                });
+
+                console.log('Response status:', response.status);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server error: ${response.status} - ${errorText}`);
+                }
+
+                const data = await response.json();
+                console.log('Success!', data);
+
+                if (data.success && data.visualizations) {
+                    resultDiv.innerHTML = `
+                        <h2>Success!</h2>
+                        <p>Waveform: ${data.visualizations.waveform ? 'Generated ✓' : 'Failed ✗'}</p>
+                        <p>Spectrogram: ${data.visualizations.spectrogram ? 'Generated ✓' : 'Failed ✗'}</p>
+                        <p>Spectrum: ${data.visualizations.spectrum ? 'Generated ✓' : 'Failed ✗'}</p>
+                        ${data.visualizations.waveform ? `<img src="data:image/png;base64,${data.visualizations.waveform.image}" style="width:100%; max-width:800px;">` : ''}
+                    `;
+                } else {
+                    resultDiv.innerHTML = '<p style="color: orange;">Response received but no visualizations</p>';
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                resultDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

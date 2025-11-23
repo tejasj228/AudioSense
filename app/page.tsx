@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import Meyda from "meyda";
 import Loader from "./components/Loader";
+import AudioVisualizations from "./components/AudioVisualizations";
+import AudioControls from "./components/AudioControls";
 
 const navItems = [
   { label: "Home", href: "#home" },
@@ -23,6 +25,20 @@ type ChatMessage = {
   text: string;
 };
 
+type VisualizationData = {
+  image: string;
+  insight: string;
+  metrics: any;
+};
+
+type AudioControlsType = {
+  loudness: number;
+  bass: number;
+  treble: number;
+  pitch: number;
+  timeRange: [number, number];
+};
+
 export default function HomePage() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -33,12 +49,25 @@ export default function HomePage() {
     avgTempo: string;
     character: string;
     description: string;
-    dynamicsScore: number; // 0-100
-    brightnessScore: number; // 0-100
+    dynamicsScore: number;
+    brightnessScore: number;
   } | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [visualizations, setVisualizations] = useState<{
+    waveform: VisualizationData | null;
+    spectrogram: VisualizationData | null;
+    spectrum: VisualizationData | null;
+  } | null>(null);
+  const [audioControls, setAudioControls] = useState<AudioControlsType>({
+    loudness: 0,
+    bass: 0,
+    treble: 0,
+    pitch: 0,
+    timeRange: [0, 100]
+  });
+  const [audioDuration, setAudioDuration] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -53,6 +82,14 @@ export default function HomePage() {
       setInsights(null);
       setChatMessages([]);
       setSuggestions([]);
+      setVisualizations(null);
+      setAudioControls({
+        loudness: 0,
+        bass: 0,
+        treble: 0,
+        pitch: 0,
+        timeRange: [0, 100]
+      });
     }
   };
 
@@ -187,6 +224,11 @@ export default function HomePage() {
 
       setChatMessages([{ role: 'bot', text: "Analysis complete. I've generated a dataset of your audio. How would you like to modify it?" }]);
       setAnalysisData(encodeURI(csvContent));
+      setAudioDuration(duration);
+      setAudioControls(prev => ({ ...prev, timeRange: [0, duration] }));
+
+      // Call Python backend for visualizations
+      await generateVisualizations();
 
     } catch (error) {
       console.error("Error analyzing audio:", error);
@@ -214,6 +256,41 @@ export default function HomePage() {
       console.error("Failed to generate suggestions", e);
       // Fallback
       setSuggestions(["Make it louder", "Boost brightness", "Increase tempo"]);
+    }
+  };
+
+  const generateVisualizations = async () => {
+    if (!audioFile) return;
+
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioFile);
+
+      const res = await fetch('http://localhost:5000/api/visualize', {
+        method: 'POST',
+        body: formData,
+        mode: 'cors'
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to generate visualizations');
+      }
+
+      const data = await res.json();
+
+      if (data.success && data.visualizations) {
+        setVisualizations(data.visualizations);
+      }
+    } catch (e) {
+      console.error('Error generating visualizations:', e);
+    }
+  };
+
+  const handleControlChange = (control: string, value: number | [number, number]) => {
+    if (control === 'timeRange') {
+      setAudioControls(prev => ({ ...prev, timeRange: value as [number, number] }));
+    } else {
+      setAudioControls(prev => ({ ...prev, [control]: value as number }));
     }
   };
 
@@ -477,6 +554,28 @@ export default function HomePage() {
               )}
             </div>
           </div>
+
+          {/* Audio Visualizations */}
+          {visualizations && (
+            <AudioVisualizations
+              waveform={visualizations.waveform}
+              spectrogram={visualizations.spectrogram}
+              spectrum={visualizations.spectrum}
+            />
+          )}
+
+          {/* Audio Controls */}
+          {insights && audioDuration > 0 && (
+            <AudioControls
+              loudness={audioControls.loudness}
+              bass={audioControls.bass}
+              treble={audioControls.treble}
+              pitch={audioControls.pitch}
+              timeRange={audioControls.timeRange}
+              audioDuration={audioDuration}
+              onControlChange={handleControlChange}
+            />
+          )}
 
           {insights && (
             <div className="chatbot-section">
