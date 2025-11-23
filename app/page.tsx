@@ -40,6 +40,7 @@ type AudioControlsType = {
 };
 
 export default function HomePage() {
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGeneratingVisualizations, setIsGeneratingVisualizations] = useState(false);
@@ -76,7 +77,6 @@ export default function HomePage() {
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [showAudioPlayer, setShowAudioPlayer] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [chatMode, setChatMode] = useState<'ask' | 'modify'>('ask');
   const [modifiedAudioUrl, setModifiedAudioUrl] = useState<string | null>(null);
   const [showChatAudioPlayer, setShowChatAudioPlayer] = useState(false);
   const [isChatAudioPlaying, setIsChatAudioPlaying] = useState(false);
@@ -86,6 +86,11 @@ export default function HomePage() {
   const visualizationRef = useRef<HTMLDivElement>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const chatAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
 
   // Scroll to top on page load/refresh
   useEffect(() => {
@@ -453,106 +458,86 @@ export default function HomePage() {
     setChatMessages(newMessages);
     setChatInput("");
 
-    if (chatMode === 'ask') {
-      // Ask mode - just chat
-      try {
-        const res = await fetch("/api/gemini", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "chat",
-            messages: newMessages,
-            context: insights ? `Character: ${insights.character}. Description: ${insights.description}. Dataset summary: ${analysisData ? 'Available' : 'Not available'}` : ""
-          })
-        });
-
-        const data = await res.json();
-        setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't process that." }]);
-
-      } catch (e) {
-        console.error("Chat error", e);
-        setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error connecting to Gemini." }]);
-      }
-    } else {
-      // Modify mode - apply modifications and generate audio
-      if (!audioFile || !analysisData) {
-        setChatMessages(prev => [...prev, { role: 'bot', text: "Please analyze audio first before making modifications." }]);
-        return;
-      }
-
+    // Auto-detect intent - check if modification or question
+    try {
       setIsProcessing(true);
-      setLoadingProgress(0);
+      setLoadingProgress(10);
       setLoadingStep('Understanding your request...');
 
-      try {
-        setLoadingProgress(20);
-        // Get modification from Gemini
-        const res = await fetch("/api/gemini", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "chat",
-            messages: newMessages,
-            context: insights ? `Character: ${insights.character}. Description: ${insights.description}` : ""
-          })
-        });
+      const res = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "chat",
+          messages: newMessages,
+          context: insights ? `Character: ${insights.character}. Description: ${insights.description}. Dataset summary: ${analysisData ? 'Available' : 'Not available'}` : ""
+        })
+      });
 
-        const data = await res.json();
+      const data = await res.json();
 
-        if (data.type === "modification") {
-          setLoadingStep('Modifying dataset...');
-          setLoadingProgress(40);
-          
-          // Apply modification to dataset
-          applyModification(data);
-          
-          setLoadingStep('Applying changes to audio...');
-          setLoadingProgress(60);
-          
-          // Convert modified dataset to blob
-          const csvData = decodeURIComponent(analysisData.replace('data:text/csv;charset=utf-8,', ''));
-          const csvBlob = new Blob([csvData], { type: 'text/csv' });
-          
-          // Send to backend to apply to audio
-          const formData = new FormData();
-          formData.append('audio', audioFile);
-          formData.append('dataset', csvBlob, 'modified_dataset.csv');
-
-          setLoadingProgress(70);
-          const audioRes = await fetch('http://localhost:5000/api/apply-dataset', {
-            method: 'POST',
-            body: formData,
-            mode: 'cors'
-          });
-
-          if (!audioRes.ok) {
-            throw new Error('Failed to apply modifications to audio');
-          }
-
-          setLoadingProgress(90);
-          setLoadingStep('Loading modified audio...');
-          
-          const audioBlob = await audioRes.blob();
-          const audioUrl = URL.createObjectURL(audioBlob);
-          
-          // Store new audio without revoking - keep previous modifications in history
-          setModifiedAudioUrl(audioUrl);
-          setModifiedDatasetUrl(analysisData);
-          setShowChatAudioPlayer(true);
-          setLoadingProgress(100);
-          
-          setChatMessages(prev => [...prev, { role: 'bot', text: data.message + "\n\nModified audio is ready! Use the preview and download buttons below." }]);
-        } else {
-          setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't understand that modification request. Try something like 'make it louder' or 'boost brightness'." }]);
+      // Check if it's a modification request
+      if (data.type === "modification") {
+        // Modification mode - apply modifications and generate audio
+        if (!audioFile || !analysisData) {
+          setChatMessages(prev => [...prev, { role: 'bot', text: "Please analyze audio first before making modifications." }]);
+          setIsProcessing(false);
+          return;
         }
 
-      } catch (e) {
-        console.error("Modification error", e);
-        setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error applying modifications." }]);
-      } finally {
-        setIsProcessing(false);
-        setLoadingProgress(0);
+        setLoadingStep('Modifying dataset...');
+        setLoadingProgress(40);
+        
+        // Apply modification to dataset
+        applyModification(data);
+        
+        setLoadingStep('Applying changes to audio...');
+        setLoadingProgress(60);
+        
+        // Convert modified dataset to blob
+        const csvData = decodeURIComponent(analysisData.replace('data:text/csv;charset=utf-8,', ''));
+        const csvBlob = new Blob([csvData], { type: 'text/csv' });
+        
+        // Send to backend to apply to audio
+        const formData = new FormData();
+        formData.append('audio', audioFile);
+        formData.append('dataset', csvBlob, 'modified_dataset.csv');
+
+        setLoadingProgress(70);
+        const audioRes = await fetch('http://localhost:5000/api/apply-dataset', {
+          method: 'POST',
+          body: formData,
+          mode: 'cors'
+        });
+
+        if (!audioRes.ok) {
+          throw new Error('Failed to apply modifications to audio');
+        }
+
+        setLoadingProgress(90);
+        setLoadingStep('Loading modified audio...');
+        
+        const audioBlob = await audioRes.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        
+        // Store new audio
+        setModifiedAudioUrl(audioUrl);
+        setModifiedDatasetUrl(analysisData);
+        setShowChatAudioPlayer(true);
+        setLoadingProgress(100);
+        
+        setChatMessages(prev => [...prev, { role: 'bot', text: data.message + "\n\nModified audio is ready! Use the preview and download buttons below." }]);
+      } else {
+        // Question mode - just add response to chat
+        setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't understand that. Please try again." }]);
       }
+
+    } catch (e) {
+      console.error("Chat error", e);
+      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error processing your request." }]);
+    } finally {
+      setIsProcessing(false);
+      setLoadingProgress(0);
     }
   };
 
@@ -766,16 +751,7 @@ export default function HomePage() {
     }
   };
 
-  // Hide audio player when switching to Ask mode
-  useEffect(() => {
-    if (chatMode === 'ask') {
-      setShowChatAudioPlayer(false);
-      if (chatAudioPlayerRef.current) {
-        chatAudioPlayerRef.current.pause();
-      }
-      setIsChatAudioPlaying(false);
-    }
-  }, [chatMode]);
+
 
   const drawWaveform = (audioUrl: string) => {
     const canvas = document.getElementById('waveform-canvas') as HTMLCanvasElement;
@@ -1145,23 +1121,15 @@ export default function HomePage() {
 
           {insights && (
             <div className="chatbot-section">
-              <div className="chatbot-container">
+              <div 
+                className="chatbot-container"
+                style={{
+                  '--chat-height': `${Math.min(850, Math.max(300, 300 + chatMessages.length * 50))}px`
+                } as React.CSSProperties}
+              >
                 {/* Clear Chat Button */}
                 <div className="chat-header">
-                  <div className="chat-mode-toggle">
-                    <button 
-                      className={`mode-btn ${chatMode === 'ask' ? 'active' : ''}`}
-                      onClick={() => setChatMode('ask')}
-                    >
-                      Ask
-                    </button>
-                    <button 
-                      className={`mode-btn ${chatMode === 'modify' ? 'active' : ''}`}
-                      onClick={() => setChatMode('modify')}
-                    >
-                      Modify
-                    </button>
-                  </div>
+                  <h3 className="chat-title">AI Assistant</h3>
                   <button className="clear-chat-btn" onClick={handleClearChat}>
                     Clear Chat
                   </button>
@@ -1324,26 +1292,16 @@ export default function HomePage() {
                   </div>
                 )}
 
-                {chatMode === 'ask' && suggestions.length > 0 && (
-                  <div className="suggestions-list">
-                    {suggestions.map((s, i) => (
-                      <button key={i} className="suggestion-chip" onClick={() => handleSuggestionClick(s)}>
-                         {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
                 <div className="chat-input-area">
                   <input
                     type="text"
-                    placeholder={chatMode === 'ask' ? "Ask about your audio..." : "Describe your modification..."}
+                    placeholder="Ask questions or request modifications..."
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                   />
                   <button className="send-btn" onClick={handleSendMessage}>
-                    {chatMode === 'ask' ? ' Ask' : ' Modify'}
+                    Send
                   </button>
                 </div>
               </div>

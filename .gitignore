@@ -18,7 +18,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
-
+.env
 # ===== NODE.JS / JAVASCRIPT =====
 # Dependencies
 node_modules/
