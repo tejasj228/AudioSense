@@ -235,18 +235,26 @@ def generate_spectrum(audio_path):
 
 def analyze_audio_file(audio_path):
     """Main function to generate all visualizations - optimized version"""
-    # Load audio once for all visualizations
+    # Load audio once for all visualizations with downsampling for speed
     print("📁 Loading audio file...")
-    y, sr = librosa.load(audio_path, sr=None)
+    # Downsample to 22050 Hz for faster processing (still good quality for analysis)
+    y, sr = librosa.load(audio_path, sr=22050, mono=True)
     duration = librosa.get_duration(y=y, sr=sr)
     print(f"✅ Audio loaded: {duration:.2f}s at {sr}Hz")
     
-    # Generate all visualizations in parallel using the same audio data
+    # Pre-compute features that are used across multiple visualizations
+    print("🔍 Pre-computing features...")
+    
+    # Compute STFT once for both spectrogram and spectrum
+    D = librosa.stft(y, n_fft=1024, hop_length=512)
+    D_db = librosa.amplitude_to_db(np.abs(D), ref=np.max)
+    
+    # Generate all visualizations using pre-computed data
     print("🎨 Generating waveform...")
     waveform_data = generate_waveform_optimized(y, sr, duration)
     
     print("🎨 Generating spectrogram...")
-    spectrogram_data = generate_spectrogram_optimized(y, sr)
+    spectrogram_data = generate_spectrogram_optimized(y, sr, D_db)
     
     print("🎨 Generating spectrum...")
     spectrum_data = generate_spectrum_optimized(y, sr)
@@ -263,14 +271,18 @@ def generate_waveform_optimized(y, sr, duration):
     """Generate waveform from pre-loaded audio"""
     try:
         # Create smaller figure for faster rendering
-        fig = Figure(figsize=(10, 3), facecolor='none')
+        fig = Figure(figsize=(9, 2.5), facecolor='none')
         ax = fig.add_subplot(111)
         ax.set_facecolor('none')
         
+        # Downsample waveform for plotting (keeps every Nth sample for speed)
+        downsample_factor = max(1, len(y) // 5000)
+        y_downsampled = y[::downsample_factor]
+        time = np.linspace(0, duration, len(y_downsampled))
+        
         # Plot waveform
-        time = np.linspace(0, duration, len(y))
-        ax.plot(time, y, color='#00f2fe', linewidth=0.5, alpha=0.8)
-        ax.fill_between(time, y, alpha=0.3, color='#4facfe')
+        ax.plot(time, y_downsampled, color='#00f2fe', linewidth=0.5, alpha=0.8)
+        ax.fill_between(time, y_downsampled, alpha=0.3, color='#4facfe')
         
         # Styling
         ax.set_xlabel('Time (s)', color='white', fontsize=9)
@@ -284,14 +296,14 @@ def generate_waveform_optimized(y, sr, duration):
         
         fig.tight_layout()
         
-        # Convert to base64 with lower DPI for speed
+        # Convert to base64 with high DPI for quality
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', transparent=True, dpi=80, bbox_inches='tight')
+        fig.savefig(buf, format='png', transparent=True, dpi=150, bbox_inches='tight')
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close(fig)
         
-        # Generate insights
+        # Generate insights (use full data for accuracy)
         peak_amplitude = np.max(np.abs(y))
         rms = np.sqrt(np.mean(y**2))
         dynamic_range = 20 * np.log10(peak_amplitude / (rms + 1e-10))
@@ -317,20 +329,18 @@ def generate_waveform_optimized(y, sr, duration):
         print(f"Error generating waveform: {e}")
         return None
 
-def generate_spectrogram_optimized(y, sr):
-    """Generate spectrogram from pre-loaded audio"""
+def generate_spectrogram_optimized(y, sr, D_db):
+    """Generate spectrogram from pre-computed STFT"""
     try:
         # Create smaller figure
-        fig = Figure(figsize=(10, 4), facecolor='none')
+        fig = Figure(figsize=(9, 3.5), facecolor='none')
         ax = fig.add_subplot(111)
         ax.set_facecolor('none')
         
-        # Compute spectrogram
-        D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
-        
-        # Plot spectrogram
-        img = librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='hz', 
-                                       ax=ax, cmap='viridis', alpha=0.9)
+        # Plot spectrogram using pre-computed D_db
+        img = librosa.display.specshow(D_db, sr=sr, x_axis='time', y_axis='hz', 
+                                       ax=ax, cmap='viridis', alpha=0.9,
+                                       hop_length=512)
         
         # Styling
         ax.set_xlabel('Time (s)', color='white', fontsize=9)
@@ -350,13 +360,13 @@ def generate_spectrogram_optimized(y, sr):
         
         # Convert to base64
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', transparent=True, dpi=80, bbox_inches='tight')
+        fig.savefig(buf, format='png', transparent=True, dpi=150, bbox_inches='tight')
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close(fig)
         
-        # Generate insights
-        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr)
+        # Generate insights (fast computation)
+        spectral_centroid = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=512)
         avg_centroid = np.mean(spectral_centroid)
         
         insight = f"Average spectral centroid: {avg_centroid:.0f} Hz. "
@@ -382,12 +392,15 @@ def generate_spectrum_optimized(y, sr):
     """Generate spectrum from pre-loaded audio"""
     try:
         # Create smaller figure
-        fig = Figure(figsize=(10, 3), facecolor='none')
+        fig = Figure(figsize=(9, 2.5), facecolor='none')
         ax = fig.add_subplot(111)
         ax.set_facecolor('none')
         
-        # Compute FFT
-        fft = np.fft.fft(y)
+        # Compute FFT on downsampled data for speed
+        downsample_factor = max(1, len(y) // 100000)
+        y_ds = y[::downsample_factor]
+        
+        fft = np.fft.fft(y_ds)
         magnitude = np.abs(fft)
         frequency = np.linspace(0, sr, len(magnitude))
         
@@ -399,14 +412,18 @@ def generate_spectrum_optimized(y, sr):
         # Convert to dB
         magnitude_db = 20 * np.log10(magnitude + 1e-10)
         
+        # Smooth the spectrum for cleaner visualization
+        from scipy.ndimage import gaussian_filter1d
+        magnitude_db_smooth = gaussian_filter1d(magnitude_db, sigma=5)
+        
         # Plot spectrum
-        ax.plot(frequency, magnitude_db, color='#00f2fe', linewidth=1, alpha=0.8)
-        ax.fill_between(frequency, magnitude_db, alpha=0.3, color='#4facfe')
+        ax.plot(frequency, magnitude_db_smooth, color='#00f2fe', linewidth=1, alpha=0.8)
+        ax.fill_between(frequency, magnitude_db_smooth, alpha=0.3, color='#4facfe')
         
         # Styling
         ax.set_xlabel('Frequency (Hz)', color='white', fontsize=9)
         ax.set_ylabel('Magnitude (dB)', color='white', fontsize=9)
-        ax.set_xlim(0, min(sr/2, 20000))
+        ax.set_xlim(20, min(sr/2, 20000))
         ax.tick_params(colors='white', labelsize=7)
         ax.grid(True, alpha=0.2, color='white')
         ax.spines['bottom'].set_color('white')
@@ -419,7 +436,7 @@ def generate_spectrum_optimized(y, sr):
         
         # Convert to base64
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', transparent=True, dpi=80, bbox_inches='tight')
+        fig.savefig(buf, format='png', transparent=True, dpi=150, bbox_inches='tight')
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close(fig)

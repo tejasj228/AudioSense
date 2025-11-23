@@ -42,6 +42,9 @@ type AudioControlsType = {
 export default function HomePage() {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isGeneratingVisualizations, setIsGeneratingVisualizations] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStep, setLoadingStep] = useState('');
   const [analysisData, setAnalysisData] = useState<string | null>(null);
   const [insights, setInsights] = useState<{
     duration: string;
@@ -68,12 +71,38 @@ export default function HomePage() {
     timeRange: [0, 100]
   });
   const [audioDuration, setAudioDuration] = useState<number>(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processedAudioUrl, setProcessedAudioUrl] = useState<string | null>(null);
+  const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
+  const [showAudioPlayer, setShowAudioPlayer] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [chatMode, setChatMode] = useState<'ask' | 'modify'>('ask');
+  const [modifiedAudioUrl, setModifiedAudioUrl] = useState<string | null>(null);
+  const [showChatAudioPlayer, setShowChatAudioPlayer] = useState(false);
+  const [isChatAudioPlaying, setIsChatAudioPlaying] = useState(false);
+  const [modifiedDatasetUrl, setModifiedDatasetUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const visualizationRef = useRef<HTMLDivElement>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const chatAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
+  // Scroll to top on page load/refresh
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+    window.scrollTo(0, 0);
+  }, []);
+
+  // Disable scrolling when loading
+  useEffect(() => {
+    if (isAnalyzing || isGeneratingVisualizations || isProcessing) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [isAnalyzing, isGeneratingVisualizations, isProcessing]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -97,15 +126,24 @@ export default function HomePage() {
     if (!audioFile) return;
 
     setIsAnalyzing(true);
+    setIsGeneratingVisualizations(true);
+    setLoadingProgress(0);
+    setLoadingStep('Loading audio file...');
     setAnalysisData(null);
     setInsights(null);
     setChatMessages([]);
     setSuggestions([]);
+    setVisualizations(null);
 
     try {
+      setLoadingProgress(10);
       const arrayBuffer = await audioFile.arrayBuffer();
+      setLoadingStep('Decoding audio...');
+      setLoadingProgress(20);
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      setLoadingStep('Extracting audio features...');
+      setLoadingProgress(30);
 
       const source = audioContext.createBufferSource();
       source.buffer = audioBuffer;
@@ -125,8 +163,15 @@ export default function HomePage() {
 
       // Analyze in 0.5s chunks approx
       const samplesPerChunk = Math.floor(sampleRate * 0.5);
+      const totalChunks = Math.ceil(channelData.length / samplesPerChunk);
+      let chunkIndex = 0;
 
       for (let i = 0; i < channelData.length; i += samplesPerChunk) {
+        chunkIndex++;
+        if (chunkIndex % 10 === 0) {
+          const progress = 30 + Math.floor((chunkIndex / totalChunks) * 20);
+          setLoadingProgress(Math.min(progress, 50));
+        }
         const signal = new Float32Array(bufferSize);
         // Copy data from the current position
         if (i + bufferSize <= channelData.length) {
@@ -222,19 +267,23 @@ export default function HomePage() {
       // Generate suggestions via Gemini
       generateSuggestions(description, character);
 
+      setLoadingProgress(50);
+      setLoadingStep('Analysis complete!');
       setChatMessages([{ role: 'bot', text: "Analysis complete. I've generated a dataset of your audio. How would you like to modify it?" }]);
       setAnalysisData(encodeURI(csvContent));
       setAudioDuration(duration);
       setAudioControls(prev => ({ ...prev, timeRange: [0, duration] }));
+      
+      setIsAnalyzing(false);
 
-      // Call Python backend for visualizations
+      // Call Python backend for visualizations (runs in parallel)
       await generateVisualizations();
 
     } catch (error) {
       console.error("Error analyzing audio:", error);
       alert("Error analyzing audio file.");
-    } finally {
       setIsAnalyzing(false);
+      setIsGeneratingVisualizations(false);
     }
   };
 
@@ -263,26 +312,68 @@ export default function HomePage() {
     if (!audioFile) return;
 
     try {
+      setLoadingStep('📤 Sending audio to backend...');
+      setLoadingProgress(55);
       const formData = new FormData();
       formData.append('audio', audioFile);
 
-      const res = await fetch('http://localhost:5000/api/visualize', {
+      setLoadingStep('Loading audio file...');
+      setLoadingProgress(60);
+      
+      // Start the fetch request
+      const fetchPromise = fetch('http://localhost:5000/api/visualize', {
         method: 'POST',
         body: formData,
         mode: 'cors'
       });
+      
+      // Simulate progress updates while waiting for response
+      const progressInterval = setInterval(() => {
+        setLoadingProgress(prev => {
+          if (prev < 65) {
+            setLoadingStep('Loading audio file...');
+            return prev + 1;
+          } else if (prev < 75) {
+            setLoadingStep('Generating waveform...');
+            return prev + 1;
+          } else if (prev < 85) {
+            setLoadingStep('Generating spectrogram...');
+            return prev + 1;
+          } else if (prev < 92) {
+            setLoadingStep('Generating spectrum...');
+            return prev + 1;
+          }
+          return prev;
+        });
+      }, 300);
+      
+      const res = await fetchPromise;
+      clearInterval(progressInterval);
+      
+      setLoadingStep('Finalizing...');
+      setLoadingProgress(95);
 
       if (!res.ok) {
         throw new Error('Failed to generate visualizations');
       }
-
+      
       const data = await res.json();
 
       if (data.success && data.visualizations) {
+        setLoadingStep('Complete!');
+        setLoadingProgress(100);
         setVisualizations(data.visualizations);
+        
+        // Scroll to visualization section after a brief delay
+        setTimeout(() => {
+          visualizationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 300);
       }
     } catch (e) {
       console.error('Error generating visualizations:', e);
+    } finally {
+      setIsGeneratingVisualizations(false);
+      setLoadingProgress(0);
     }
   };
 
@@ -362,29 +453,106 @@ export default function HomePage() {
     setChatMessages(newMessages);
     setChatInput("");
 
-    try {
-      const res = await fetch("/api/gemini", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "chat",
-          messages: newMessages,
-          context: insights ? `Character: ${insights.character}. Description: ${insights.description}` : ""
-        })
-      });
+    if (chatMode === 'ask') {
+      // Ask mode - just chat
+      try {
+        const res = await fetch("/api/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "chat",
+            messages: newMessages,
+            context: insights ? `Character: ${insights.character}. Description: ${insights.description}. Dataset summary: ${analysisData ? 'Available' : 'Not available'}` : ""
+          })
+        });
 
-      const data = await res.json();
-
-      if (data.type === "modification") {
-        applyModification(data);
-        setChatMessages(prev => [...prev, { role: 'bot', text: data.message }]);
-      } else {
+        const data = await res.json();
         setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't process that." }]);
+
+      } catch (e) {
+        console.error("Chat error", e);
+        setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error connecting to Gemini." }]);
+      }
+    } else {
+      // Modify mode - apply modifications and generate audio
+      if (!audioFile || !analysisData) {
+        setChatMessages(prev => [...prev, { role: 'bot', text: "Please analyze audio first before making modifications." }]);
+        return;
       }
 
-    } catch (e) {
-      console.error("Chat error", e);
-      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error connecting to Gemini." }]);
+      setIsProcessing(true);
+      setLoadingProgress(0);
+      setLoadingStep('Understanding your request...');
+
+      try {
+        setLoadingProgress(20);
+        // Get modification from Gemini
+        const res = await fetch("/api/gemini", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "chat",
+            messages: newMessages,
+            context: insights ? `Character: ${insights.character}. Description: ${insights.description}` : ""
+          })
+        });
+
+        const data = await res.json();
+
+        if (data.type === "modification") {
+          setLoadingStep('Modifying dataset...');
+          setLoadingProgress(40);
+          
+          // Apply modification to dataset
+          applyModification(data);
+          
+          setLoadingStep('Applying changes to audio...');
+          setLoadingProgress(60);
+          
+          // Convert modified dataset to blob
+          const csvData = decodeURIComponent(analysisData.replace('data:text/csv;charset=utf-8,', ''));
+          const csvBlob = new Blob([csvData], { type: 'text/csv' });
+          
+          // Send to backend to apply to audio
+          const formData = new FormData();
+          formData.append('audio', audioFile);
+          formData.append('dataset', csvBlob, 'modified_dataset.csv');
+
+          setLoadingProgress(70);
+          const audioRes = await fetch('http://localhost:5000/api/apply-dataset', {
+            method: 'POST',
+            body: formData,
+            mode: 'cors'
+          });
+
+          if (!audioRes.ok) {
+            throw new Error('Failed to apply modifications to audio');
+          }
+
+          setLoadingProgress(90);
+          setLoadingStep('Loading modified audio...');
+          
+          const audioBlob = await audioRes.blob();
+          const audioUrl = URL.createObjectURL(audioBlob);
+          
+          // Store new audio without revoking - keep previous modifications in history
+          setModifiedAudioUrl(audioUrl);
+          setModifiedDatasetUrl(analysisData);
+          setShowChatAudioPlayer(true);
+          setLoadingProgress(100);
+          
+          setChatMessages(prev => [...prev, { role: 'bot', text: data.message + "\n\nModified audio is ready! Use the preview and download buttons below." }]);
+        } else {
+          setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't understand that modification request. Try something like 'make it louder' or 'boost brightness'." }]);
+        }
+
+      } catch (e) {
+        console.error("Modification error", e);
+        setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error applying modifications." }]);
+      } finally {
+        setIsProcessing(false);
+        setLoadingProgress(0);
+      }
     }
   };
 
@@ -393,19 +561,331 @@ export default function HomePage() {
     // Optional: Auto-send could be enabled here if desired
   };
 
+  const handleApplyChanges = async () => {
+    if (!audioFile) return;
+
+    // Stop any playing audio
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+    setIsPlaying(false);
+    setShowAudioPlayer(false);
+
+    setIsProcessing(true);
+    setLoadingProgress(0);
+    setLoadingStep('🎵 Preparing audio...');
+    try {
+      setLoadingProgress(10);
+      const formData = new FormData();
+      formData.append('audio', audioFile);
+      formData.append('params', JSON.stringify({
+        loudness: audioControls.loudness,
+        bass: audioControls.bass,
+        treble: audioControls.treble,
+        pitch: audioControls.pitch,
+        timeRange: audioControls.timeRange,
+        preview: false
+      }));
+
+      setLoadingStep('Sending audio to server...');
+      setLoadingProgress(30);
+
+      const fetchPromise = fetch('http://localhost:5000/api/process-audio', {
+        method: 'POST',
+        body: formData,
+        mode: 'cors'
+      });
+
+      // Simulate progress updates
+      const progressInterval = setInterval(() => {
+        setLoadingProgress(prev => {
+          if (prev < 50) {
+            setLoadingStep('Applying bass/treble filters...');
+            return prev + 2;
+          } else if (prev < 70) {
+            setLoadingStep('Adjusting pitch...');
+            return prev + 2;
+          } else if (prev < 85) {
+            setLoadingStep('Applying loudness...');
+            return prev + 2;
+          } else if (prev < 95) {
+            setLoadingStep('Finalizing...');
+            return prev + 1;
+          }
+          return prev;
+        });
+      }, 200);
+
+      const res = await fetchPromise;
+      clearInterval(progressInterval);
+      setLoadingProgress(98);
+
+      if (!res.ok) {
+        throw new Error('Failed to process audio');
+      }
+
+      setLoadingStep('Saving processed audio...');
+      const blob = await res.blob();
+      setLoadingProgress(100);
+      const url = URL.createObjectURL(blob);
+      setProcessedAudioUrl(url);
+    } catch (e) {
+      console.error('Error processing audio:', e);
+      alert('Error processing audio. Make sure the Python server is running.');
+    } finally {
+      setIsProcessing(false);
+      setLoadingProgress(0);
+    }
+  };
+
+  const handlePreview = async () => {
+    if (!audioFile) return;
+
+    // Stop any playing audio
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current.currentTime = 0;
+    }
+    setIsPlaying(false);
+    setShowAudioPlayer(false);
+    setPreviewAudioUrl(null);
+
+    setIsProcessing(true);
+    setLoadingProgress(0);
+    setLoadingStep('Preparing preview...');
+    try {
+      setLoadingProgress(20);
+      const formData = new FormData();
+      formData.append('audio', audioFile);
+      formData.append('params', JSON.stringify({
+        loudness: audioControls.loudness,
+        bass: audioControls.bass,
+        treble: audioControls.treble,
+        pitch: audioControls.pitch,
+        timeRange: audioControls.timeRange,
+        preview: true // Only process the selected time range
+      }));
+
+      setLoadingStep('Processing preview...');
+      setLoadingProgress(50);
+
+      const fetchPromise = fetch('http://localhost:5000/api/process-audio', {
+        method: 'POST',
+        body: formData,
+        mode: 'cors'
+      });
+
+      const progressInterval = setInterval(() => {
+        setLoadingProgress(prev => Math.min(prev + 5, 90));
+      }, 200);
+
+      const res = await fetchPromise;
+      clearInterval(progressInterval);
+      setLoadingProgress(95);
+
+      if (!res.ok) {
+        throw new Error('Failed to process audio preview');
+      }
+
+      setLoadingStep('Loading player...');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      setLoadingProgress(100);
+      
+      // Set up audio player
+      setPreviewAudioUrl(url);
+      setShowAudioPlayer(true);
+    } catch (e) {
+      console.error('Error previewing audio:', e);
+      alert('❌ Error previewing audio. Make sure the Python server is running.');
+    } finally {
+      setIsProcessing(false);
+      setLoadingProgress(0);
+    }
+  };
+
+  const togglePlayPause = () => {
+    if (audioPlayerRef.current) {
+      if (isPlaying) {
+        audioPlayerRef.current.pause();
+      } else {
+        audioPlayerRef.current.play();
+      }
+    }
+  };
+
+  const toggleChatAudioPlayPause = () => {
+    if (chatAudioPlayerRef.current) {
+      if (isChatAudioPlaying) {
+        chatAudioPlayerRef.current.pause();
+      } else {
+        chatAudioPlayerRef.current.play();
+      }
+    }
+  };
+
+  const handleChatDownload = () => {
+    if (!modifiedAudioUrl) {
+      alert('No modified audio available.');
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = modifiedAudioUrl;
+    link.download = `gemini_modified_${audioFile?.name || 'audio'}.wav`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadDataset = () => {
+    if (!modifiedDatasetUrl) {
+      alert('No modified dataset available.');
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = modifiedDatasetUrl;
+    link.download = `modified_dataset_${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleClearChat = () => {
+    setChatMessages([]);
+    setChatInput('');
+    setModifiedAudioUrl(null);
+    setModifiedDatasetUrl(null);
+    setShowChatAudioPlayer(false);
+    setIsChatAudioPlaying(false);
+    if (chatAudioPlayerRef.current) {
+      chatAudioPlayerRef.current.pause();
+      chatAudioPlayerRef.current = null;
+    }
+  };
+
+  // Hide audio player when switching to Ask mode
+  useEffect(() => {
+    if (chatMode === 'ask') {
+      setShowChatAudioPlayer(false);
+      if (chatAudioPlayerRef.current) {
+        chatAudioPlayerRef.current.pause();
+      }
+      setIsChatAudioPlaying(false);
+    }
+  }, [chatMode]);
+
+  const drawWaveform = (audioUrl: string) => {
+    const canvas = document.getElementById('waveform-canvas') as HTMLCanvasElement;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Set canvas size to match container
+    const container = canvas.parentElement;
+    if (container) {
+      canvas.width = container.offsetWidth;
+      canvas.height = container.offsetHeight;
+    }
+
+    // Fetch and decode audio
+    fetch(audioUrl)
+      .then(res => res.arrayBuffer())
+      .then(arrayBuffer => {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        return audioContext.decodeAudioData(arrayBuffer);
+      })
+      .then(audioBuffer => {
+        const rawData = audioBuffer.getChannelData(0); // Get first channel
+        const samples = 100; // Number of bars
+        const blockSize = Math.floor(rawData.length / samples);
+        const filteredData: number[] = [];
+
+        for (let i = 0; i < samples; i++) {
+          let blockStart = blockSize * i;
+          let sum = 0;
+          for (let j = 0; j < blockSize; j++) {
+            sum += Math.abs(rawData[blockStart + j]);
+          }
+          filteredData.push(sum / blockSize);
+        }
+
+        // Normalize data
+        const multiplier = Math.pow(Math.max(...filteredData), -1);
+        const normalizedData = filteredData.map(n => n * multiplier);
+
+        // Draw waveform
+        const barWidth = canvas.width / samples;
+        const barGap = 1;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        normalizedData.forEach((value, i) => {
+          const barHeight = value * canvas.height * 0.8;
+          const x = i * barWidth;
+          const y = (canvas.height - barHeight) / 2;
+
+          // Create gradient for each bar
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#6c8bff');
+          gradient.addColorStop(1, '#a873ff');
+
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x, y, barWidth - barGap, barHeight);
+        });
+      })
+      .catch(() => {
+        // Fallback: draw random bars
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const bars = 100;
+        const barWidth = canvas.width / bars;
+        
+        for (let i = 0; i < bars; i++) {
+          const barHeight = Math.random() * canvas.height * 0.6;
+          const x = i * barWidth;
+          const y = (canvas.height - barHeight) / 2;
+
+          const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+          gradient.addColorStop(0, '#6c8bff');
+          gradient.addColorStop(1, '#a873ff');
+
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x, y, barWidth - 1, barHeight);
+        }
+      });
+  };
+
+  const handleDownload = () => {
+    if (!processedAudioUrl) {
+      alert('Please click "Apply Changes" first to process the audio.');
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = processedAudioUrl;
+    link.download = `processed_${audioFile?.name || 'audio'}.wav`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="page-shell">
+      {/* Global Loader Overlay */}
+      {(isAnalyzing || isGeneratingVisualizations || isProcessing) && (
+        <div className="global-loader-overlay">
+          <div className="global-loader-content">
+            <Loader progress={loadingProgress} message={loadingStep} />
+          </div>
+        </div>
+      )}
       <div className="ambient-grid" aria-hidden="true" />
       <header className="floating-header">
         <div className="header-inner">
           <span className="brand">AudioSense</span>
-          <nav className="nav-links">
-            {navItems.map((item) => (
-              <a key={item.label} href={item.href}>
-                {item.label}
-              </a>
-            ))}
-          </nav>
           <a className="ghost-link" href="#analyze">
             Try Demo
           </a>
@@ -557,29 +1037,136 @@ export default function HomePage() {
 
           {/* Audio Visualizations */}
           {visualizations && (
-            <AudioVisualizations
-              waveform={visualizations.waveform}
-              spectrogram={visualizations.spectrogram}
-              spectrum={visualizations.spectrum}
-            />
+            <div ref={visualizationRef}>
+              <AudioVisualizations
+                waveform={visualizations.waveform}
+                spectrogram={visualizations.spectrogram}
+                spectrum={visualizations.spectrum}
+              />
+            </div>
           )}
 
           {/* Audio Controls */}
           {insights && audioDuration > 0 && (
-            <AudioControls
-              loudness={audioControls.loudness}
-              bass={audioControls.bass}
-              treble={audioControls.treble}
-              pitch={audioControls.pitch}
-              timeRange={audioControls.timeRange}
-              audioDuration={audioDuration}
-              onControlChange={handleControlChange}
-            />
+            <>
+              <AudioControls
+                loudness={audioControls.loudness}
+                bass={audioControls.bass}
+                treble={audioControls.treble}
+                pitch={audioControls.pitch}
+                timeRange={audioControls.timeRange}
+                audioDuration={audioDuration}
+                onControlChange={handleControlChange}
+                onApply={handleApplyChanges}
+                onPreview={handlePreview}
+                onDownload={handleDownload}
+                isProcessing={isProcessing}
+              />
+
+              {/* Audio Player */}
+              {showAudioPlayer && previewAudioUrl && (
+                <div className="audio-player-section">
+                  <div className="audio-player-container">
+                    <h4 className="player-title">🎵 Preview Player</h4>
+                    <div className="soundcloud-player">
+                      <button 
+                        className="play-pause-btn-main" 
+                        onClick={togglePlayPause}
+                      >
+                        {isPlaying ? (
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+                            <rect x="6" y="4" width="4" height="16" rx="1"/>
+                            <rect x="14" y="4" width="4" height="16" rx="1"/>
+                          </svg>
+                        ) : (
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+                            <path d="M8 5v14l11-7z"/>
+                          </svg>
+                        )}
+                      </button>
+                      <div className="waveform-container" onClick={(e) => {
+                        if (!audioPlayerRef.current) return;
+                        const container = e.currentTarget;
+                        const rect = container.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const percentage = x / rect.width;
+                        audioPlayerRef.current.currentTime = audioPlayerRef.current.duration * percentage;
+                      }}>
+                        <canvas id="waveform-canvas" className="waveform-canvas"></canvas>
+                        <div className="progress-overlay" id="progress-overlay"></div>
+                      </div>
+                      <div className="time-display">
+                        <span id="current-time">0:00</span>
+                        <span id="duration-time">0:00</span>
+                      </div>
+                    </div>
+                    <audio 
+                      src={previewAudioUrl} 
+                      className="hidden-audio"
+                      autoPlay
+                      onTimeUpdate={(e) => {
+                        const audio = e.currentTarget;
+                        if (!audio.duration) return;
+                        const progress = (audio.currentTime / audio.duration) * 100;
+                        const overlay = document.getElementById('progress-overlay');
+                        const currentTime = document.getElementById('current-time');
+                        if (overlay) overlay.style.width = `${progress}%`;
+                        if (currentTime) {
+                          const mins = Math.floor(audio.currentTime / 60);
+                          const secs = Math.floor(audio.currentTime % 60);
+                          currentTime.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                        }
+                      }}
+                      onLoadedMetadata={(e) => {
+                        const audio = e.currentTarget;
+                        const durationTime = document.getElementById('duration-time');
+                        if (durationTime) {
+                          const mins = Math.floor(audio.duration / 60);
+                          const secs = Math.floor(audio.duration % 60);
+                          durationTime.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                        }
+                        // Draw waveform
+                        if (previewAudioUrl) {
+                          drawWaveform(previewAudioUrl);
+                        }
+                      }}
+                      onEnded={() => setIsPlaying(false)}
+                      onPause={() => setIsPlaying(false)}
+                      onPlay={() => setIsPlaying(true)}
+                      ref={(el) => {
+                        if (el) audioPlayerRef.current = el;
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {insights && (
             <div className="chatbot-section">
               <div className="chatbot-container">
+                {/* Clear Chat Button */}
+                <div className="chat-header">
+                  <div className="chat-mode-toggle">
+                    <button 
+                      className={`mode-btn ${chatMode === 'ask' ? 'active' : ''}`}
+                      onClick={() => setChatMode('ask')}
+                    >
+                      Ask
+                    </button>
+                    <button 
+                      className={`mode-btn ${chatMode === 'modify' ? 'active' : ''}`}
+                      onClick={() => setChatMode('modify')}
+                    >
+                      Modify
+                    </button>
+                  </div>
+                  <button className="clear-chat-btn" onClick={handleClearChat}>
+                    Clear Chat
+                  </button>
+                </div>
+
                 <div className="chat-history">
                   {chatMessages.map((msg, idx) => (
                     <div key={idx} className={`chat-message ${msg.role}`}>
@@ -588,23 +1175,175 @@ export default function HomePage() {
                   ))}
                   <div ref={chatEndRef} />
                 </div>
-                <div className="suggestions-list">
-                  {suggestions.map((s, i) => (
-                    <button key={i} className="suggestion-chip" onClick={() => handleSuggestionClick(s)}>
-                      ✨ {s}
-                    </button>
-                  ))}
-                </div>
+
+                {/* Modified Audio Player in Chat - SoundCloud Style */}
+                {showChatAudioPlayer && modifiedAudioUrl && (
+                  <div className="chat-audio-section">
+                    <h4 className="chat-audio-title">Modified Audio</h4>
+                    <div className="soundcloud-player-chat">
+                      <button 
+                        className="play-pause-btn-chat"
+                        onClick={toggleChatAudioPlayPause}
+                      >
+                        {isChatAudioPlaying ? (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                            <rect x="6" y="4" width="4" height="16" rx="1"/>
+                            <rect x="14" y="4" width="4" height="16" rx="1"/>
+                          </svg>
+                        ) : (
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                            <path d="M8 5v14l11-7z"/>
+                          </svg>
+                        )}
+                      </button>
+                      <div className="waveform-container-chat" onClick={(e) => {
+                        if (!chatAudioPlayerRef.current) return;
+                        const container = e.currentTarget;
+                        const rect = container.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const percentage = x / rect.width;
+                        chatAudioPlayerRef.current.currentTime = chatAudioPlayerRef.current.duration * percentage;
+                      }}>
+                        <canvas id="waveform-canvas-chat" className="waveform-canvas-chat"></canvas>
+                        <div id="progress-overlay-chat" className="progress-overlay-chat"></div>
+                      </div>
+                      <div className="time-display-chat">
+                        <span id="current-time-chat">0:00</span>
+                        <span id="duration-time-chat">0:00</span>
+                      </div>
+                    </div>
+                    <div className="chat-audio-controls">
+                      <button 
+                        className="chat-audio-btn download-btn"
+                        onClick={handleChatDownload}
+                      >
+                        Download Audio
+                      </button>
+                      <button 
+                        className="chat-audio-btn dataset-btn"
+                        onClick={handleDownloadDataset}
+                      >
+                        Download Dataset
+                      </button>
+                    </div>
+                    <audio 
+                      src={modifiedAudioUrl}
+                      className="hidden-audio"
+                      autoPlay
+                      onTimeUpdate={(e) => {
+                        const audio = e.currentTarget;
+                        if (!audio.duration) return;
+                        const progress = (audio.currentTime / audio.duration) * 100;
+                        const overlay = document.getElementById('progress-overlay-chat');
+                        const currentTime = document.getElementById('current-time-chat');
+                        if (overlay) overlay.style.width = `${progress}%`;
+                        if (currentTime) {
+                          const mins = Math.floor(audio.currentTime / 60);
+                          const secs = Math.floor(audio.currentTime % 60);
+                          currentTime.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                        }
+                      }}
+                      onLoadedMetadata={(e) => {
+                        const audio = e.currentTarget;
+                        const durationTime = document.getElementById('duration-time-chat');
+                        if (durationTime) {
+                          const mins = Math.floor(audio.duration / 60);
+                          const secs = Math.floor(audio.duration % 60);
+                          durationTime.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+                        }
+                        if (modifiedAudioUrl) {
+                          const canvas = document.getElementById('waveform-canvas-chat') as HTMLCanvasElement;
+                          if (canvas) {
+                            const ctx = canvas.getContext('2d');
+                            if (ctx) {
+                              const container = canvas.parentElement;
+                              if (container) {
+                                canvas.width = container.offsetWidth;
+                                canvas.height = container.offsetHeight;
+                              }
+                              fetch(modifiedAudioUrl)
+                                .then(res => res.arrayBuffer())
+                                .then(arrayBuffer => {
+                                  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                                  return audioContext.decodeAudioData(arrayBuffer);
+                                })
+                                .then(audioBuffer => {
+                                  const rawData = audioBuffer.getChannelData(0);
+                                  const samples = 80;
+                                  const blockSize = Math.floor(rawData.length / samples);
+                                  const filteredData: number[] = [];
+                                  for (let i = 0; i < samples; i++) {
+                                    let blockStart = blockSize * i;
+                                    let sum = 0;
+                                    for (let j = 0; j < blockSize; j++) {
+                                      sum += Math.abs(rawData[blockStart + j]);
+                                    }
+                                    filteredData.push(sum / blockSize);
+                                  }
+                                  const multiplier = Math.pow(Math.max(...filteredData), -1);
+                                  const normalizedData = filteredData.map(n => n * multiplier);
+                                  const barWidth = canvas.width / samples;
+                                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                                  normalizedData.forEach((value, i) => {
+                                    const barHeight = value * canvas.height * 0.75;
+                                    const x = i * barWidth;
+                                    const y = (canvas.height - barHeight) / 2;
+                                    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                                    gradient.addColorStop(0, '#6c8bff');
+                                    gradient.addColorStop(1, '#a873ff');
+                                    ctx.fillStyle = gradient;
+                                    ctx.fillRect(x, y, barWidth - 1, barHeight);
+                                  });
+                                })
+                                .catch(() => {
+                                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                                  const bars = 80;
+                                  const barWidth = canvas.width / bars;
+                                  for (let i = 0; i < bars; i++) {
+                                    const barHeight = Math.random() * canvas.height * 0.6;
+                                    const x = i * barWidth;
+                                    const y = (canvas.height - barHeight) / 2;
+                                    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                                    gradient.addColorStop(0, '#6c8bff');
+                                    gradient.addColorStop(1, '#a873ff');
+                                    ctx.fillStyle = gradient;
+                                    ctx.fillRect(x, y, barWidth - 1, barHeight);
+                                  }
+                                });
+                            }
+                          }
+                        }
+                      }}
+                      onEnded={() => setIsChatAudioPlaying(false)}
+                      onPause={() => setIsChatAudioPlaying(false)}
+                      onPlay={() => setIsChatAudioPlaying(true)}
+                      ref={(el) => {
+                        if (el) chatAudioPlayerRef.current = el;
+                      }}
+                    />
+                  </div>
+                )}
+
+                {chatMode === 'ask' && suggestions.length > 0 && (
+                  <div className="suggestions-list">
+                    {suggestions.map((s, i) => (
+                      <button key={i} className="suggestion-chip" onClick={() => handleSuggestionClick(s)}>
+                         {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="chat-input-area">
                   <input
                     type="text"
-                    placeholder="Ask Gemini to modify the audio..."
+                    placeholder={chatMode === 'ask' ? "Ask about your audio..." : "Describe your modification..."}
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                   />
                   <button className="send-btn" onClick={handleSendMessage}>
-                    Send
+                    {chatMode === 'ask' ? ' Ask' : ' Modify'}
                   </button>
                 </div>
               </div>
