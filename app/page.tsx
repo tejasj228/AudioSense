@@ -1,3 +1,9 @@
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import Meyda from "meyda";
+import Loader from "./components/Loader";
+
 const navItems = [
   { label: "Home", href: "#home" },
   { label: "Analyze Audio", href: "#analyze" },
@@ -12,7 +18,304 @@ const waveformHeights = [
   56, 78, 60, 86
 ];
 
+type ChatMessage = {
+  role: 'user' | 'bot';
+  text: string;
+};
+
 export default function HomePage() {
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisData, setAnalysisData] = useState<string | null>(null);
+  const [insights, setInsights] = useState<{
+    duration: string;
+    avgRms: string;
+    avgTempo: string;
+    character: string;
+    description: string;
+    dynamicsScore: number; // 0-100
+    brightnessScore: number; // 0-100
+  } | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setAudioFile(e.target.files[0]);
+      setAnalysisData(null);
+      setInsights(null);
+      setChatMessages([]);
+      setSuggestions([]);
+    }
+  };
+
+  const analyzeAudio = async () => {
+    if (!audioFile) return;
+
+    setIsAnalyzing(true);
+    setAnalysisData(null);
+    setInsights(null);
+    setChatMessages([]);
+    setSuggestions([]);
+
+    try {
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+
+      const duration = audioBuffer.duration;
+      const sampleRate = audioContext.sampleRate;
+      const bufferSize = 512;
+
+      const channelData = audioBuffer.getChannelData(0);
+      let csvContent = "data:text/csv;charset=utf-8,duration_sec,rms_energy,zcr,spectral_centroid,spectral_bandwidth,spectral_rolloff,tempo,mfcc_1,mfcc_2,mfcc_3,mfcc_4,mfcc_5,mfcc_6,mfcc_7,mfcc_8,mfcc_9,mfcc_10,mfcc_11,mfcc_12,mfcc_13\n";
+
+      let totalRms = 0;
+      let frameCount = 0;
+      let spectralCentroids = [];
+
+      Meyda.bufferSize = bufferSize;
+
+      // Analyze in 0.5s chunks approx
+      const samplesPerChunk = Math.floor(sampleRate * 0.5);
+
+      for (let i = 0; i < channelData.length; i += samplesPerChunk) {
+        const signal = new Float32Array(bufferSize);
+        // Copy data from the current position
+        if (i + bufferSize <= channelData.length) {
+          signal.set(channelData.slice(i, i + bufferSize));
+        } else {
+          signal.set(channelData.slice(i));
+        }
+
+        const features = Meyda.extract(
+          ["rms", "zcr", "spectralCentroid", "spectralSpread", "spectralRolloff", "mfcc"],
+          signal
+        );
+
+        if (features) {
+          const time = i / sampleRate;
+          const rms = features.rms;
+          const zcr = features.zcr;
+          const centroid = features.spectralCentroid;
+          const bandwidth = features.spectralSpread;
+          const rolloff = features.spectralRolloff;
+          const mfcc = features.mfcc as number[]; // Array of 13
+
+          // Simple Tempo Estimate (Randomized/Placeholder for now as real detection is complex)
+          const tempo = 120; // Placeholder
+
+          csvContent += `${time.toFixed(2)},${rms.toFixed(6)},${zcr.toFixed(6)},${centroid.toFixed(6)},${bandwidth.toFixed(6)},${rolloff.toFixed(6)},${tempo},${mfcc.join(',')}\n`;
+
+          totalRms += rms;
+          spectralCentroids.push(centroid);
+          frameCount++;
+        }
+      }
+
+      const avgRms = totalRms / frameCount;
+      const avgCentroid = spectralCentroids.reduce((a, b) => a + b, 0) / frameCount;
+
+      // Determine character and generate prompts
+      let character = "Balanced";
+      let description = "The audio has a balanced frequency response with moderate dynamic range.";
+      let generatedSuggestions = [
+        "Increase overall loudness",
+        "Add warmth to the low end",
+        "Enhance stereo width"
+      ];
+      let brightnessScore = 50;
+      let dynamicsScore = Math.min(avgRms * 200, 100); // Rough scaling
+
+      if (avgCentroid > 3000) {
+        character = "Bright & Airy";
+        description = "High spectral energy detected. The track feels open and detailed but may lack warmth.";
+        brightnessScore = 85;
+        generatedSuggestions = [
+          "Tame harsh high frequencies",
+          "Boost low-mid warmth",
+          "Compress to glue the mix"
+        ];
+      } else if (avgCentroid < 1000) {
+        character = "Dark & Warm";
+        description = "Dominant low-mid energy. The sound is full and warm, potentially muddy.";
+        brightnessScore = 25;
+        generatedSuggestions = [
+          "Add air and presence",
+          "Clean up muddy low-mids",
+          "Tighten the bass response"
+        ];
+      } else {
+        character = "Neutral & Clear";
+        brightnessScore = 50;
+      }
+
+      if (avgRms > 0.3) {
+        character += ", High Energy";
+        description += " It is quite loud and impactful.";
+        dynamicsScore = 90;
+        generatedSuggestions.push("Recover transient detail");
+      } else if (avgRms < 0.1) {
+        character += ", Dynamic/Quiet";
+        description += " It has a wide dynamic range and feels intimate.";
+        dynamicsScore = 30;
+        generatedSuggestions.push("Apply parallel compression");
+      }
+
+      setInsights({
+        duration: `${Math.floor(duration / 60)}:${Math.floor(duration % 60).toString().padStart(2, '0')}`,
+        avgRms: avgRms.toFixed(4),
+        avgTempo: "120 BPM (Est.)", // Placeholder
+        character: character,
+        description: description,
+        dynamicsScore: Math.round(dynamicsScore),
+        brightnessScore: Math.round(brightnessScore)
+      });
+
+      // Generate suggestions via Gemini
+      generateSuggestions(description, character);
+
+      setChatMessages([{ role: 'bot', text: "Analysis complete. I've generated a dataset of your audio. How would you like to modify it?" }]);
+      setAnalysisData(encodeURI(csvContent));
+
+    } catch (error) {
+      console.error("Error analyzing audio:", error);
+      alert("Error analyzing audio file.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const generateSuggestions = async (desc: string, char: string) => {
+    try {
+      const res = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "suggestions",
+          context: `Audio Character: ${char}. Description: ${desc}`
+        })
+      });
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setSuggestions(data);
+      }
+    } catch (e) {
+      console.error("Failed to generate suggestions", e);
+      // Fallback
+      setSuggestions(["Make it louder", "Boost brightness", "Increase tempo"]);
+    }
+  };
+
+  const downloadCsv = () => {
+    if (!analysisData) return;
+    const link = document.createElement("a");
+    link.setAttribute("href", analysisData);
+    link.setAttribute("download", "audio_analysis_dataset.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const applyModification = (mod: any) => {
+    if (!analysisData) return;
+
+    // Decode CSV
+    const csvString = decodeURI(analysisData).replace("data:text/csv;charset=utf-8,", "");
+    const rows = csvString.split("\n");
+    const header = rows[0].split(",");
+    const dataRows = rows.slice(1).filter(r => r.trim() !== "");
+
+    // Find column index
+    let colIndex = -1;
+    if (mod.column === "all_mfcc") {
+      // Special case for MFCCs? For now let's skip or handle simple cols
+    } else {
+      colIndex = header.indexOf(mod.column);
+    }
+
+    if (colIndex === -1 && mod.column !== "all_mfcc") return;
+
+    const newRows = dataRows.map((row, idx) => {
+      const cols = row.split(",");
+      const time = parseFloat(cols[0]);
+
+      // Check time range
+      if (mod.start_time !== undefined && time < mod.start_time) return row;
+      if (mod.end_time !== undefined && time > mod.end_time) return row;
+
+      if (mod.column === "all_mfcc") {
+        // Apply to all MFCC columns (indices 8 to 20)
+        for (let i = 8; i <= 20; i++) {
+          let val = parseFloat(cols[i]);
+          if (mod.operation === "multiply") val *= mod.value;
+          else if (mod.operation === "add") val += mod.value;
+          else if (mod.operation === "set") val = mod.value;
+          cols[i] = val.toFixed(6);
+        }
+      } else {
+        let val = parseFloat(cols[colIndex]);
+        if (mod.operation === "multiply") val *= mod.value;
+        else if (mod.operation === "add") val += mod.value;
+        else if (mod.operation === "set") val = mod.value;
+        cols[colIndex] = val.toFixed(6);
+      }
+      return cols.join(",");
+    });
+
+    const newCsvContent = "data:text/csv;charset=utf-8," + [header.join(","), ...newRows].join("\n");
+    setAnalysisData(encodeURI(newCsvContent));
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim()) return;
+
+    const userMsg = { role: 'user', text: chatInput } as ChatMessage;
+    const newMessages = [...chatMessages, userMsg];
+    setChatMessages(newMessages);
+    setChatInput("");
+
+    try {
+      const res = await fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "chat",
+          messages: newMessages,
+          context: insights ? `Character: ${insights.character}. Description: ${insights.description}` : ""
+        })
+      });
+
+      const data = await res.json();
+
+      if (data.type === "modification") {
+        applyModification(data);
+        setChatMessages(prev => [...prev, { role: 'bot', text: data.message }]);
+      } else {
+        setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't process that." }]);
+      }
+
+    } catch (e) {
+      console.error("Chat error", e);
+      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error connecting to Gemini." }]);
+    }
+  };
+
+  const handleSuggestionClick = (suggestion: string) => {
+    setChatInput(suggestion);
+    // Optional: Auto-send could be enabled here if desired
+  };
+
   return (
     <div className="page-shell">
       <div className="ambient-grid" aria-hidden="true" />
@@ -42,10 +345,7 @@ export default function HomePage() {
               through an elegant, data-rich experience.
             </p>
             <div className="hero-actions">
-              <a className="primary-btn" href="#analyze">
-                Upload Audio
-              </a>
-              <a className="secondary-btn" href="#insights">
+              <a className="secondary-btn" href="#analyze">
                 Try Demo
               </a>
             </div>
@@ -85,8 +385,19 @@ export default function HomePage() {
               <div className="drop-content">
                 <p className="drop-title">Drag &amp; Drop Audio</p>
                 <p className="drop-subtitle">or</p>
-                <button type="button" className="browse-btn">
-                  Browse Files
+                <input
+                  type="file"
+                  accept="audio/*"
+                  onChange={handleFileChange}
+                  ref={fileInputRef}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  type="button"
+                  className="browse-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {audioFile ? audioFile.name : "Browse Files"}
                 </button>
                 <div className="supported">
                   <span>Supports</span>
@@ -100,20 +411,107 @@ export default function HomePage() {
             </div>
             <div className="insight-card">
               <h3>Smart Analysis Preview</h3>
-              <p>
-                AudioSense prepares an interactive profile with clarity
-                metrics, spectral tilt, stereo imaging, and headroom targets.
-              </p>
-              <ul>
-                <li>Spectral contour mapping &amp; harmonic balance</li>
-                <li>Transient density &amp; rhythmic consistency</li>
-                <li>Noise floor prediction with intelligent gating</li>
-              </ul>
-              <button type="button" className="analyze-btn">
-                Analyze Audio
-              </button>
+              {isAnalyzing ? (
+                <Loader />
+              ) : insights ? (
+                <div className="insights-preview">
+                  <div className="insight-summary-text">
+                    <p>{insights.description}</p>
+                  </div>
+
+                  <div className="visual-cards">
+                    <div className="visual-card">
+                      <span className="visual-label">Dynamics</span>
+                      <div className="visual-bar-container">
+                        <div className="visual-bar" style={{ width: `${insights.dynamicsScore}%` }} />
+                      </div>
+                      <span className="visual-value">{insights.dynamicsScore}%</span>
+                    </div>
+                    <div className="visual-card">
+                      <span className="visual-label">Brightness</span>
+                      <div className="visual-bar-container">
+                        <div className="visual-bar" style={{ width: `${insights.brightnessScore}%`, background: 'linear-gradient(90deg, #4facfe 0%, #00f2fe 100%)' }} />
+                      </div>
+                      <span className="visual-value">{insights.brightnessScore}%</span>
+                    </div>
+                  </div>
+
+                  <div className="insight-row">
+                    <span>Duration:</span> <strong>{insights.duration}</strong>
+                  </div>
+                  <div className="insight-row">
+                    <span>Character:</span> <strong>{insights.character}</strong>
+                  </div>
+                  <div className="insight-row">
+                    <span>Tempo:</span> <strong>{insights.avgTempo}</strong>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="analyze-btn"
+                    onClick={downloadCsv}
+                  >
+                    Download Dataset
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p>
+                    AudioSense prepares an interactive profile with clarity
+                    metrics, spectral tilt, stereo imaging, and headroom targets.
+                  </p>
+                  <ul>
+                    <li>Spectral contour mapping &amp; harmonic balance</li>
+                    <li>Transient density &amp; rhythmic consistency</li>
+                    <li>Noise floor prediction with intelligent gating</li>
+                  </ul>
+                  <button
+                    type="button"
+                    className="analyze-btn"
+                    onClick={analyzeAudio}
+                    disabled={!audioFile}
+                  >
+                    Analyze Audio
+                  </button>
+                </>
+              )}
             </div>
           </div>
+
+          {insights && (
+            <div className="chatbot-section">
+              <div className="chatbot-container">
+                <div className="chat-history">
+                  {chatMessages.map((msg, idx) => (
+                    <div key={idx} className={`chat-message ${msg.role}`}>
+                      <div className="message-bubble">{msg.text}</div>
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+                <div className="suggestions-list">
+                  {suggestions.map((s, i) => (
+                    <button key={i} className="suggestion-chip" onClick={() => handleSuggestionClick(s)}>
+                      ✨ {s}
+                    </button>
+                  ))}
+                </div>
+                <div className="chat-input-area">
+                  <input
+                    type="text"
+                    placeholder="Ask Gemini to modify the audio..."
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                  />
+                  <button className="send-btn" onClick={handleSendMessage}>
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
         </section>
 
         <section id="insights" className="insights-section">
