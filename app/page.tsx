@@ -25,6 +25,123 @@ type ChatMessage = {
   text: string;
 };
 
+// Function to render markdown-like text with proper formatting
+const renderFormattedText = (text: string) => {
+  // Split by newlines to handle paragraphs
+  const lines = text.split('\n');
+  
+  return lines.map((line, idx) => {
+    if (!line.trim()) {
+      return <br key={idx} />;
+    }
+    
+    // Process the line for inline formatting
+    const processedLine = processInlineFormatting(line);
+    
+    // Check if it's a bullet point
+    if (line.trim().startsWith('•') || line.trim().startsWith('-')) {
+      return (
+        <div key={idx} className="chat-bullet-point">
+          {processedLine}
+        </div>
+      );
+    }
+    
+    // Regular line
+    return (
+      <div key={idx} className="chat-line">
+        {processedLine}
+      </div>
+    );
+  });
+};
+
+// Process inline formatting (bold, italic, etc.)
+const processInlineFormatting = (text: string) => {
+  const parts: React.ReactNode[] = [];
+  let remainingText = text;
+  let key = 0;
+  
+  while (remainingText.length > 0) {
+    // Try to find the earliest formatting pattern
+    let earliestMatch: {
+      index: number;
+      length: number;
+      content: string;
+      type: 'strong' | 'em' | 'code';
+    } | null = null;
+    
+    // Check for **bold**
+    const boldMatch = remainingText.match(/\*\*(.+?)\*\*/);
+    if (boldMatch && boldMatch.index !== undefined) {
+      earliestMatch = {
+        index: boldMatch.index,
+        length: boldMatch[0].length,
+        content: boldMatch[1],
+        type: 'strong'
+      };
+    }
+    
+    // Check for `code`
+    const codeMatch = remainingText.match(/`(.+?)`/);
+    if (codeMatch && codeMatch.index !== undefined) {
+      if (!earliestMatch || codeMatch.index < earliestMatch.index) {
+        earliestMatch = {
+          index: codeMatch.index,
+          length: codeMatch[0].length,
+          content: codeMatch[1],
+          type: 'code'
+        };
+      }
+    }
+    
+    // Check for *italic* (but not **)
+    const italicMatch = remainingText.match(/\*([^*]+?)\*/);
+    if (italicMatch && italicMatch.index !== undefined) {
+      if (!earliestMatch || italicMatch.index < earliestMatch.index) {
+        // Make sure it's not part of **
+        const beforeChar = italicMatch.index > 0 ? remainingText[italicMatch.index - 1] : '';
+        const afterIndex = italicMatch.index + italicMatch[0].length;
+        const afterChar = afterIndex < remainingText.length ? remainingText[afterIndex] : '';
+        
+        if (beforeChar !== '*' && afterChar !== '*') {
+          earliestMatch = {
+            index: italicMatch.index,
+            length: italicMatch[0].length,
+            content: italicMatch[1],
+            type: 'em'
+          };
+        }
+      }
+    }
+    
+    if (earliestMatch) {
+      // Add text before the match
+      if (earliestMatch.index > 0) {
+        parts.push(remainingText.substring(0, earliestMatch.index));
+      }
+      
+      // Add the formatted element
+      if (earliestMatch.type === 'strong') {
+        parts.push(<strong key={`fmt-${key++}`}>{earliestMatch.content}</strong>);
+      } else if (earliestMatch.type === 'em') {
+        parts.push(<em key={`fmt-${key++}`}>{earliestMatch.content}</em>);
+      } else if (earliestMatch.type === 'code') {
+        parts.push(<code key={`fmt-${key++}`} className="inline-code">{earliestMatch.content}</code>);
+      }
+      
+      // Move past this match
+      remainingText = remainingText.substring(earliestMatch.index + earliestMatch.length);
+    } else {
+      // No more matches, add the rest of the text
+      parts.push(remainingText);
+      break;
+    }
+  }
+  
+  return parts.length > 0 ? parts : text;
+};
+
 type VisualizationData = {
   image: string;
   insight: string;
@@ -73,6 +190,7 @@ export default function HomePage() {
   });
   const [audioDuration, setAudioDuration] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isChatLoading, setIsChatLoading] = useState(false);
   const [processedAudioUrl, setProcessedAudioUrl] = useState<string | null>(null);
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null);
   const [showAudioPlayer, setShowAudioPlayer] = useState(false);
@@ -97,7 +215,15 @@ export default function HomePage() {
     window.scrollTo(0, 0);
   }, []);
 
-  // Disable scrolling when loading
+  // Auto-scroll chat to bottom when messages change or loader appears
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [chatMessages, isChatLoading]);
+
+
+  // Disable scrolling when loading (but not for chat)
   useEffect(() => {
     if (isAnalyzing || isGeneratingVisualizations || isProcessing) {
       document.body.style.overflow = 'hidden';
@@ -162,7 +288,12 @@ export default function HomePage() {
 
       let totalRms = 0;
       let frameCount = 0;
-      let spectralCentroids = [];
+      let spectralCentroids: number[] = [];
+      let zcrValues: number[] = [];
+      let rmsValues: number[] = [];
+      let spectralBandwidths: number[] = [];
+      let spectralRolloffs: number[] = [];
+      const mfccData: number[][] = [];
 
       Meyda.bufferSize = bufferSize;
 
@@ -206,12 +337,70 @@ export default function HomePage() {
 
           totalRms += rms;
           spectralCentroids.push(centroid);
+          zcrValues.push(zcr);
+          rmsValues.push(rms);
+          spectralBandwidths.push(bandwidth);
+          spectralRolloffs.push(rolloff);
+          mfccData.push(mfcc);
           frameCount++;
         }
       }
 
+      // Calculate comprehensive statistics
       const avgRms = totalRms / frameCount;
       const avgCentroid = spectralCentroids.reduce((a, b) => a + b, 0) / frameCount;
+      const avgZcr = zcrValues.reduce((a, b) => a + b, 0) / frameCount;
+      const avgBandwidth = spectralBandwidths.reduce((a, b) => a + b, 0) / frameCount;
+      const avgRolloff = spectralRolloffs.reduce((a, b) => a + b, 0) / frameCount;
+      
+      // Peak and dynamic range analysis
+      const peakRms = Math.max(...rmsValues);
+      const minRms = Math.min(...rmsValues.filter(v => v > 0.001)); // Filter out silence
+      const dynamicRangeDb = 20 * Math.log10(peakRms / (minRms + 0.0001));
+      
+      // Noise floor estimation (average of quietest 10%)
+      const sortedRms = [...rmsValues].sort((a, b) => a - b);
+      const noiseFloorSamples = sortedRms.slice(0, Math.floor(sortedRms.length * 0.1));
+      const noiseFloor = noiseFloorSamples.reduce((a, b) => a + b, 0) / noiseFloorSamples.length;
+      
+      // Signal-to-noise ratio
+      const snrDb = 20 * Math.log10(avgRms / (noiseFloor + 0.0001));
+      
+      // Spectral statistics for frequency analysis
+      const centroidStdDev = Math.sqrt(
+        spectralCentroids.reduce((sum, val) => sum + Math.pow(val - avgCentroid, 2), 0) / frameCount
+      );
+      
+      // ZCR statistics for pitch analysis
+      const zcrStdDev = Math.sqrt(
+        zcrValues.reduce((sum, val) => sum + Math.pow(val - avgZcr, 2), 0) / frameCount
+      );
+      
+      // MFCC statistics for timbre/classification
+      const avgMfcc = new Array(13).fill(0);
+      for (let i = 0; i < 13; i++) {
+        avgMfcc[i] = mfccData.reduce((sum, mfcc) => sum + mfcc[i], 0) / mfccData.length;
+      }
+      
+      // Store detailed analysis
+      (window as any).detailedAnalysis = {
+        avgRms,
+        peakRms,
+        minRms,
+        noiseFloor,
+        snrDb,
+        dynamicRangeDb,
+        avgCentroid,
+        centroidStdDev,
+        avgZcr,
+        zcrStdDev,
+        avgBandwidth,
+        avgRolloff,
+        avgMfcc,
+        sampleRate,
+        duration,
+        frameCount
+      };
 
       // Determine character and generate prompts
       let character = "Balanced";
@@ -274,7 +463,10 @@ export default function HomePage() {
 
       setLoadingProgress(50);
       setLoadingStep('Analysis complete!');
-      setChatMessages([{ role: 'bot', text: "Analysis complete. I've generated a dataset of your audio. How would you like to modify it?" }]);
+      setChatMessages([{ 
+        role: 'bot', 
+        text: `✅ Analysis complete! I've analyzed your audio in detail.\n\n**Quick Summary:**\n- Character: ${character}\n- Loudness: ${(avgRms * 100).toFixed(1)}% (${(20 * Math.log10(avgRms)).toFixed(1)} dBFS)\n- Frequency Balance: ${avgCentroid < 1000 ? 'Bass-Heavy' : avgCentroid > 3000 ? 'Bright' : 'Balanced'}\n- Signal-to-Noise: ${snrDb.toFixed(1)} dB\n- Dynamic Range: ${dynamicRangeDb.toFixed(1)} dB\n\nYou can ask me to:\n• Analyze any aspect (loudness, pitch, frequency, quality, noise, etc.)\n• Explain what the measurements mean\n• Classify the audio content\n• Detect distortion or issues\n• Modify the audio with any adjustments\n\nWhat would you like to know or do?` 
+      }]);
       setAnalysisData(encodeURI(csvContent));
       setAudioDuration(duration);
       setAudioControls(prev => ({ ...prev, timeRange: [0, duration] }));
@@ -359,7 +551,9 @@ export default function HomePage() {
       setLoadingProgress(95);
 
       if (!res.ok) {
-        throw new Error('Failed to generate visualizations');
+        const errorText = await res.text();
+        console.error('Server error:', errorText);
+        throw new Error(`Failed to generate visualizations: ${res.status} - ${errorText}`);
       }
       
       const data = await res.json();
@@ -400,56 +594,6 @@ export default function HomePage() {
     document.body.removeChild(link);
   };
 
-  const applyModification = (mod: any) => {
-    if (!analysisData) return;
-
-    // Decode CSV
-    const csvString = decodeURI(analysisData).replace("data:text/csv;charset=utf-8,", "");
-    const rows = csvString.split("\n");
-    const header = rows[0].split(",");
-    const dataRows = rows.slice(1).filter(r => r.trim() !== "");
-
-    // Find column index
-    let colIndex = -1;
-    if (mod.column === "all_mfcc") {
-      // Special case for MFCCs? For now let's skip or handle simple cols
-    } else {
-      colIndex = header.indexOf(mod.column);
-    }
-
-    if (colIndex === -1 && mod.column !== "all_mfcc") return;
-
-    const newRows = dataRows.map((row, idx) => {
-      const cols = row.split(",");
-      const time = parseFloat(cols[0]);
-
-      // Check time range
-      if (mod.start_time !== undefined && time < mod.start_time) return row;
-      if (mod.end_time !== undefined && time > mod.end_time) return row;
-
-      if (mod.column === "all_mfcc") {
-        // Apply to all MFCC columns (indices 8 to 20)
-        for (let i = 8; i <= 20; i++) {
-          let val = parseFloat(cols[i]);
-          if (mod.operation === "multiply") val *= mod.value;
-          else if (mod.operation === "add") val += mod.value;
-          else if (mod.operation === "set") val = mod.value;
-          cols[i] = val.toFixed(6);
-        }
-      } else {
-        let val = parseFloat(cols[colIndex]);
-        if (mod.operation === "multiply") val *= mod.value;
-        else if (mod.operation === "add") val += mod.value;
-        else if (mod.operation === "set") val = mod.value;
-        cols[colIndex] = val.toFixed(6);
-      }
-      return cols.join(",");
-    });
-
-    const newCsvContent = "data:text/csv;charset=utf-8," + [header.join(","), ...newRows].join("\n");
-    setAnalysisData(encodeURI(newCsvContent));
-  };
-
   const handleSendMessage = async () => {
     if (!chatInput.trim()) return;
 
@@ -460,17 +604,76 @@ export default function HomePage() {
 
     // Auto-detect intent - check if modification or question
     try {
-      setIsProcessing(true);
-      setLoadingProgress(10);
-      setLoadingStep('Understanding your request...');
+      setIsChatLoading(true);
 
+      // Get detailed analysis if available
+      const detailedAnalysis = (window as any).detailedAnalysis;
+      
+      let contextString = "No audio analyzed yet";
+      if (insights && detailedAnalysis) {
+        contextString = `Audio Analysis Report:
+
+BASIC CHARACTERISTICS:
+- Character: ${insights.character}
+- Description: ${insights.description}
+- Duration: ${insights.duration}
+- Sample Rate: ${detailedAnalysis.sampleRate} Hz
+- Total Frames Analyzed: ${detailedAnalysis.frameCount}
+
+LOUDNESS & DYNAMICS:
+- Average RMS Energy: ${detailedAnalysis.avgRms.toFixed(4)} (${(detailedAnalysis.avgRms * 100).toFixed(1)}%)
+- Peak RMS: ${detailedAnalysis.peakRms.toFixed(4)}
+- Minimum RMS: ${detailedAnalysis.minRms.toFixed(4)}
+- Dynamic Range: ${detailedAnalysis.dynamicRangeDb.toFixed(2)} dB
+- Dynamics Score: ${insights.dynamicsScore}/100
+- Estimated dBFS: ${(20 * Math.log10(detailedAnalysis.avgRms)).toFixed(2)} dBFS
+
+NOISE ANALYSIS:
+- Noise Floor: ${detailedAnalysis.noiseFloor.toFixed(4)}
+- Signal-to-Noise Ratio: ${detailedAnalysis.snrDb.toFixed(2)} dB
+- Noise Level Assessment: ${detailedAnalysis.snrDb > 40 ? 'Very Clean' : detailedAnalysis.snrDb > 30 ? 'Clean' : detailedAnalysis.snrDb > 20 ? 'Moderate Noise' : 'Noisy'}
+
+FREQUENCY & TONAL ANALYSIS:
+- Average Spectral Centroid: ${detailedAnalysis.avgCentroid.toFixed(2)} Hz
+- Centroid Variation (Std Dev): ${detailedAnalysis.centroidStdDev.toFixed(2)} Hz
+- Brightness Score: ${insights.brightnessScore}/100
+- Average Spectral Bandwidth: ${detailedAnalysis.avgBandwidth.toFixed(2)} Hz
+- Average Spectral Rolloff: ${detailedAnalysis.avgRolloff.toFixed(2)} Hz
+- Frequency Balance: ${detailedAnalysis.avgCentroid < 1000 ? 'Bass-Heavy/Dark' : detailedAnalysis.avgCentroid > 3000 ? 'Treble-Heavy/Bright' : 'Balanced'}
+
+PITCH & HARMONIC CONTENT:
+- Average Zero Crossing Rate: ${detailedAnalysis.avgZcr.toFixed(4)}
+- ZCR Variation (Std Dev): ${detailedAnalysis.zcrStdDev.toFixed(4)}
+- ZCR Stability: ${detailedAnalysis.zcrStdDev < 0.01 ? 'Very Stable (Likely Tonal)' : detailedAnalysis.zcrStdDev < 0.05 ? 'Stable' : 'Varying (Complex/Noisy)'}
+- Pitch Estimation: ${detailedAnalysis.avgZcr * detailedAnalysis.sampleRate / 2} Hz (from ZCR)
+
+TIMBRAL FEATURES (MFCC Coefficients):
+- MFCC1: ${detailedAnalysis.avgMfcc[0].toFixed(2)} (Overall energy)
+- MFCC2: ${detailedAnalysis.avgMfcc[1].toFixed(2)} (Spectral shape)
+- MFCC3-13: [${detailedAnalysis.avgMfcc.slice(2).map((v: number) => v.toFixed(2)).join(', ')}]
+- Timbre Character: ${Math.abs(detailedAnalysis.avgMfcc[1]) > 50 ? 'Rich/Complex' : 'Simple/Clean'}
+
+QUALITY INDICATORS:
+- Recording Quality: ${detailedAnalysis.snrDb > 40 ? '90/100' : detailedAnalysis.snrDb > 30 ? '75/100' : detailedAnalysis.snrDb > 20 ? '60/100' : '40/100'} (Based on SNR)
+- Clarity: ${detailedAnalysis.centroidStdDev < 500 ? '85/100 (Consistent)' : detailedAnalysis.centroidStdDev < 1000 ? '70/100 (Variable)' : '50/100 (Very Variable)'}
+- Dynamic Quality: ${insights.dynamicsScore}/100
+- Fidelity: ${detailedAnalysis.sampleRate >= 44100 ? '90/100 (High)' : '75/100 (Standard)'}`;
+      } else if (insights) {
+        contextString = `Basic Audio Analysis:
+- Character: ${insights.character}
+- Description: ${insights.description}
+- Dynamics Score: ${insights.dynamicsScore}/100
+- Brightness Score: ${insights.brightnessScore}/100
+- Duration: ${insights.duration}`;
+      }
+      
       const res = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "chat",
           messages: newMessages,
-          context: insights ? `Character: ${insights.character}. Description: ${insights.description}. Dataset summary: ${analysisData ? 'Available' : 'Not available'}` : ""
+          context: contextString
         })
       });
 
@@ -478,33 +681,29 @@ export default function HomePage() {
 
       // Check if it's a modification request
       if (data.type === "modification") {
-        // Modification mode - apply modifications and generate audio
-        if (!audioFile || !analysisData) {
-          setChatMessages(prev => [...prev, { role: 'bot', text: "Please analyze audio first before making modifications." }]);
-          setIsProcessing(false);
+        // Modification mode - process audio with Gemini's suggested parameters
+        if (!audioFile) {
+          setChatMessages(prev => [...prev, { role: 'bot', text: "Please upload and analyze an audio file first before making modifications." }]);
+          setIsChatLoading(false);
           return;
         }
-
-        setLoadingStep('Modifying dataset...');
-        setLoadingProgress(40);
         
-        // Apply modification to dataset
-        applyModification(data);
+        // Add bot response message
+        setChatMessages(prev => [...prev, { role: 'bot', text: data.message + "\n\nProcessing your audio now..." }]);
         
-        setLoadingStep('Applying changes to audio...');
-        setLoadingProgress(60);
-        
-        // Convert modified dataset to blob
-        const csvData = decodeURIComponent(analysisData.replace('data:text/csv;charset=utf-8,', ''));
-        const csvBlob = new Blob([csvData], { type: 'text/csv' });
-        
-        // Send to backend to apply to audio
+        // Process audio with the parameters from Gemini
         const formData = new FormData();
         formData.append('audio', audioFile);
-        formData.append('dataset', csvBlob, 'modified_dataset.csv');
+        formData.append('params', JSON.stringify({
+          loudness: data.params.loudness || 0,
+          bass: data.params.bass || 0,
+          treble: data.params.treble || 0,
+          pitch: data.params.pitch || 0,
+          timeRange: audioDuration ? [0, audioDuration] : [0, 100],
+          preview: false
+        }));
 
-        setLoadingProgress(70);
-        const audioRes = await fetch('http://localhost:5000/api/apply-dataset', {
+        const audioRes = await fetch('http://localhost:5000/api/process-audio', {
           method: 'POST',
           body: formData,
           mode: 'cors'
@@ -513,20 +712,20 @@ export default function HomePage() {
         if (!audioRes.ok) {
           throw new Error('Failed to apply modifications to audio');
         }
-
-        setLoadingProgress(90);
-        setLoadingStep('Loading modified audio...');
         
         const audioBlob = await audioRes.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
         
-        // Store new audio
+        // Store modified audio
         setModifiedAudioUrl(audioUrl);
-        setModifiedDatasetUrl(analysisData);
         setShowChatAudioPlayer(true);
-        setLoadingProgress(100);
         
-        setChatMessages(prev => [...prev, { role: 'bot', text: data.message + "\n\nModified audio is ready! Use the preview and download buttons below." }]);
+        // Update chat with success message
+        setChatMessages(prev => {
+          const messages = [...prev];
+          messages[messages.length - 1].text = data.message + "\n\n✅ Modified audio is ready! Use the player below to preview and download.";
+          return messages;
+        });
       } else {
         // Question mode - just add response to chat
         setChatMessages(prev => [...prev, { role: 'bot', text: data.text || "I couldn't understand that. Please try again." }]);
@@ -534,10 +733,9 @@ export default function HomePage() {
 
     } catch (e) {
       console.error("Chat error", e);
-      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error processing your request." }]);
+      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error processing your request. Make sure the Python backend is running on localhost:5000." }]);
     } finally {
-      setIsProcessing(false);
-      setLoadingProgress(0);
+      setIsChatLoading(false);
     }
   };
 
@@ -670,7 +868,9 @@ export default function HomePage() {
       setLoadingProgress(95);
 
       if (!res.ok) {
-        throw new Error('Failed to process audio preview');
+        const errorText = await res.text();
+        console.error('Server error:', errorText);
+        throw new Error(`Failed to process audio preview: ${res.status} - ${errorText}`);
       }
 
       setLoadingStep('Loading player...');
@@ -750,6 +950,7 @@ export default function HomePage() {
       chatAudioPlayerRef.current = null;
     }
   };
+
 
 
 
@@ -932,6 +1133,7 @@ export default function HomePage() {
                 >
                   {audioFile ? audioFile.name : "Browse Files"}
                 </button>
+
                 <div className="supported">
                   <span>Supports</span>
                   <div className="badges">
@@ -1138,9 +1340,20 @@ export default function HomePage() {
                 <div className="chat-history">
                   {chatMessages.map((msg, idx) => (
                     <div key={idx} className={`chat-message ${msg.role}`}>
-                      <div className="message-bubble">{msg.text}</div>
+                      <div className="message-bubble">{renderFormattedText(msg.text)}</div>
                     </div>
                   ))}
+                  {isChatLoading && (
+                    <div className="chat-message bot">
+                      <div className="message-bubble chatbot-loading">
+                        <div className="chatbot-loader">
+                          <div className="dot"></div>
+                          <div className="dot"></div>
+                          <div className="dot"></div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div ref={chatEndRef} />
                 </div>
 

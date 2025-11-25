@@ -1006,7 +1006,55 @@ main {
   padding: 0.8rem 1.2rem;
   border-radius: 18px;
   font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* Formatted text in chat messages */
+.message-bubble strong {
+  font-weight: 700;
+  color: #fff;
+}
+
+[data-theme="light"] .message-bubble strong {
+  color: #0a0f1c;
+  font-weight: 700;
+}
+
+.message-bubble em {
+  font-style: italic;
+  opacity: 0.95;
+}
+
+.message-bubble code.inline-code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9em;
+  color: #ffd700;
+}
+
+[data-theme="light"] .message-bubble code.inline-code {
+  background: rgba(0, 0, 0, 0.08);
+  color: #d63384;
+}
+
+.chat-line {
+  margin-bottom: 0.4rem;
+}
+
+.chat-line:last-child {
+  margin-bottom: 0;
+}
+
+.chat-bullet-point {
+  margin-left: 0.5rem;
+  margin-bottom: 0.3rem;
   line-height: 1.5;
+}
+
+.chat-bullet-point:last-child {
+  margin-bottom: 0;
 }
 
 .chat-message.user .message-bubble {
@@ -1028,6 +1076,48 @@ main {
 [data-theme="light"] .chat-message.bot .message-bubble {
   background: rgba(0, 0, 0, 0.05);
   color: #0a0f1c;
+}
+
+/* Chatbot Loading Animation */
+.message-bubble.chatbot-loading {
+  padding: 0.8rem 1.4rem;
+}
+
+.chatbot-loader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chatbot-loader .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  animation: dotBounce 1.4s infinite ease-in-out both;
+}
+
+[data-theme="light"] .chatbot-loader .dot {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.chatbot-loader .dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.chatbot-loader .dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes dotBounce {
+  0%, 80%, 100% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .suggestions-list {
@@ -1107,6 +1197,17 @@ main {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.5rem;
+}
+
+.chat-title {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+[data-theme="light"] .chat-title {
+  color: #0a0f1c;
 }
 
 /* Clear Chat Button */

@@ -548,10 +548,10 @@ fastlane/screenshots/**/*.png
 fastlane/test_output
 
 # ===== DOCKER =====
-# Docker
-.dockerignore
-Dockerfile*
-docker-compose*.yml
+# Docker - Note: Keep Dockerfiles in repo for deployment
+# .dockerignore
+# Dockerfile*
+# docker-compose*.yml
 
 # ===== TERRAFORM =====
 # Local .terraform directories
@@ -876,13 +876,17 @@ venv.bak/
 *.model
 *.weights
 
-# Data files
-*.csv
-*.json
-*.xml
-*.parquet
-data/
-datasets/
+# Data files (excluding config files)
+# *.csv - Allow CSV files (might contain test data or analysis examples)
+# *.json - Allow JSON files (needed for package.json, tsconfig.json, etc.)
+# *.xml - Allow XML files
+# *.parquet
+# data/ - Allow data directory
+# datasets/ - Allow datasets directory
+
+# Only ignore specific large data files if needed
+# /data/*.csv
+# /datasets/*.parquet
 
 # ===== CUSTOM PROJECT FILES =====
 # Add any project-specific ignores here

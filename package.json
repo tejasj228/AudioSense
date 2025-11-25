@@ -1,0 +1,35 @@
+{
+  "name": "agentic-e30287ea",
+  "version": "1.0.0",
+  "description": "This project was automatically generated using AI-powered code generation tools.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Design-Arena-Gens/agentic-e30287ea.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/Design-Arena-Gens/agentic-e30287ea/issues"
+  },
+  "homepage": "https://github.com/Design-Arena-Gens/agentic-e30287ea#readme",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "meyda": "^5.6.3",
+    "next": "^16.0.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.5",
+    "typescript": "5.9.3"
+  }
+}
