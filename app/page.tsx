@@ -29,15 +29,15 @@ type ChatMessage = {
 const renderFormattedText = (text: string) => {
   // Split by newlines to handle paragraphs
   const lines = text.split('\n');
-  
+
   return lines.map((line, idx) => {
     if (!line.trim()) {
       return <br key={idx} />;
     }
-    
+
     // Process the line for inline formatting
     const processedLine = processInlineFormatting(line);
-    
+
     // Check if it's a bullet point
     if (line.trim().startsWith('•') || line.trim().startsWith('-')) {
       return (
@@ -46,7 +46,7 @@ const renderFormattedText = (text: string) => {
         </div>
       );
     }
-    
+
     // Regular line
     return (
       <div key={idx} className="chat-line">
@@ -61,7 +61,7 @@ const processInlineFormatting = (text: string) => {
   const parts: React.ReactNode[] = [];
   let remainingText = text;
   let key = 0;
-  
+
   while (remainingText.length > 0) {
     // Try to find the earliest formatting pattern
     let earliestMatch: {
@@ -70,7 +70,7 @@ const processInlineFormatting = (text: string) => {
       content: string;
       type: 'strong' | 'em' | 'code';
     } | null = null;
-    
+
     // Check for **bold**
     const boldMatch = remainingText.match(/\*\*(.+?)\*\*/);
     if (boldMatch && boldMatch.index !== undefined) {
@@ -81,7 +81,7 @@ const processInlineFormatting = (text: string) => {
         type: 'strong'
       };
     }
-    
+
     // Check for `code`
     const codeMatch = remainingText.match(/`(.+?)`/);
     if (codeMatch && codeMatch.index !== undefined) {
@@ -94,7 +94,7 @@ const processInlineFormatting = (text: string) => {
         };
       }
     }
-    
+
     // Check for *italic* (but not **)
     const italicMatch = remainingText.match(/\*([^*]+?)\*/);
     if (italicMatch && italicMatch.index !== undefined) {
@@ -103,7 +103,7 @@ const processInlineFormatting = (text: string) => {
         const beforeChar = italicMatch.index > 0 ? remainingText[italicMatch.index - 1] : '';
         const afterIndex = italicMatch.index + italicMatch[0].length;
         const afterChar = afterIndex < remainingText.length ? remainingText[afterIndex] : '';
-        
+
         if (beforeChar !== '*' && afterChar !== '*') {
           earliestMatch = {
             index: italicMatch.index,
@@ -114,13 +114,13 @@ const processInlineFormatting = (text: string) => {
         }
       }
     }
-    
+
     if (earliestMatch) {
       // Add text before the match
       if (earliestMatch.index > 0) {
         parts.push(remainingText.substring(0, earliestMatch.index));
       }
-      
+
       // Add the formatted element
       if (earliestMatch.type === 'strong') {
         parts.push(<strong key={`fmt-${key++}`}>{earliestMatch.content}</strong>);
@@ -129,7 +129,7 @@ const processInlineFormatting = (text: string) => {
       } else if (earliestMatch.type === 'code') {
         parts.push(<code key={`fmt-${key++}`} className="inline-code">{earliestMatch.content}</code>);
       }
-      
+
       // Move past this match
       remainingText = remainingText.substring(earliestMatch.index + earliestMatch.length);
     } else {
@@ -138,7 +138,7 @@ const processInlineFormatting = (text: string) => {
       break;
     }
   }
-  
+
   return parts.length > 0 ? parts : text;
 };
 
@@ -352,36 +352,36 @@ export default function HomePage() {
       const avgZcr = zcrValues.reduce((a, b) => a + b, 0) / frameCount;
       const avgBandwidth = spectralBandwidths.reduce((a, b) => a + b, 0) / frameCount;
       const avgRolloff = spectralRolloffs.reduce((a, b) => a + b, 0) / frameCount;
-      
+
       // Peak and dynamic range analysis
       const peakRms = Math.max(...rmsValues);
       const minRms = Math.min(...rmsValues.filter(v => v > 0.001)); // Filter out silence
       const dynamicRangeDb = 20 * Math.log10(peakRms / (minRms + 0.0001));
-      
+
       // Noise floor estimation (average of quietest 10%)
       const sortedRms = [...rmsValues].sort((a, b) => a - b);
       const noiseFloorSamples = sortedRms.slice(0, Math.floor(sortedRms.length * 0.1));
       const noiseFloor = noiseFloorSamples.reduce((a, b) => a + b, 0) / noiseFloorSamples.length;
-      
+
       // Signal-to-noise ratio
       const snrDb = 20 * Math.log10(avgRms / (noiseFloor + 0.0001));
-      
+
       // Spectral statistics for frequency analysis
       const centroidStdDev = Math.sqrt(
         spectralCentroids.reduce((sum, val) => sum + Math.pow(val - avgCentroid, 2), 0) / frameCount
       );
-      
+
       // ZCR statistics for pitch analysis
       const zcrStdDev = Math.sqrt(
         zcrValues.reduce((sum, val) => sum + Math.pow(val - avgZcr, 2), 0) / frameCount
       );
-      
+
       // MFCC statistics for timbre/classification
       const avgMfcc = new Array(13).fill(0);
       for (let i = 0; i < 13; i++) {
         avgMfcc[i] = mfccData.reduce((sum, mfcc) => sum + mfcc[i], 0) / mfccData.length;
       }
-      
+
       // Store detailed analysis
       (window as any).detailedAnalysis = {
         avgRms,
@@ -463,14 +463,14 @@ export default function HomePage() {
 
       setLoadingProgress(50);
       setLoadingStep('Analysis complete!');
-      setChatMessages([{ 
-        role: 'bot', 
-        text: `✅ Analysis complete! I've analyzed your audio in detail.\n\n**Quick Summary:**\n- Character: ${character}\n- Loudness: ${(avgRms * 100).toFixed(1)}% (${(20 * Math.log10(avgRms)).toFixed(1)} dBFS)\n- Frequency Balance: ${avgCentroid < 1000 ? 'Bass-Heavy' : avgCentroid > 3000 ? 'Bright' : 'Balanced'}\n- Signal-to-Noise: ${snrDb.toFixed(1)} dB\n- Dynamic Range: ${dynamicRangeDb.toFixed(1)} dB\n\nYou can ask me to:\n• Analyze any aspect (loudness, pitch, frequency, quality, noise, etc.)\n• Explain what the measurements mean\n• Classify the audio content\n• Detect distortion or issues\n• Modify the audio with any adjustments\n\nWhat would you like to know or do?` 
+      setChatMessages([{
+        role: 'bot',
+        text: `✅ Analysis complete! I've analyzed your audio in detail.\n\n**Quick Summary:**\n- Character: ${character}\n- Loudness: ${(avgRms * 100).toFixed(1)}% (${(20 * Math.log10(avgRms)).toFixed(1)} dBFS)\n- Frequency Balance: ${avgCentroid < 1000 ? 'Bass-Heavy' : avgCentroid > 3000 ? 'Bright' : 'Balanced'}\n- Signal-to-Noise: ${snrDb.toFixed(1)} dB\n- Dynamic Range: ${dynamicRangeDb.toFixed(1)} dB\n\nYou can ask me to:\n• Analyze any aspect (loudness, pitch, frequency, quality, noise, etc.)\n• Explain what the measurements mean\n• Classify the audio content\n• Detect distortion or issues\n• Modify the audio with any adjustments\n\nWhat would you like to know or do?`
       }]);
       setAnalysisData(encodeURI(csvContent));
       setAudioDuration(duration);
       setAudioControls(prev => ({ ...prev, timeRange: [0, duration] }));
-      
+
       setIsAnalyzing(false);
 
       // Call Python backend for visualizations (runs in parallel)
@@ -516,14 +516,14 @@ export default function HomePage() {
 
       setLoadingStep('Loading audio file...');
       setLoadingProgress(60);
-      
+
       // Start the fetch request
-      const fetchPromise = fetch('http://localhost:5000/api/visualize', {
+      const fetchPromise = fetch('http://localhost:5001/api/visualize', {
         method: 'POST',
         body: formData,
         mode: 'cors'
       });
-      
+
       // Simulate progress updates while waiting for response
       const progressInterval = setInterval(() => {
         setLoadingProgress(prev => {
@@ -543,10 +543,10 @@ export default function HomePage() {
           return prev;
         });
       }, 300);
-      
+
       const res = await fetchPromise;
       clearInterval(progressInterval);
-      
+
       setLoadingStep('Finalizing...');
       setLoadingProgress(95);
 
@@ -555,14 +555,14 @@ export default function HomePage() {
         console.error('Server error:', errorText);
         throw new Error(`Failed to generate visualizations: ${res.status} - ${errorText}`);
       }
-      
+
       const data = await res.json();
 
       if (data.success && data.visualizations) {
         setLoadingStep('Complete!');
         setLoadingProgress(100);
         setVisualizations(data.visualizations);
-        
+
         // Scroll to visualization section after a brief delay
         setTimeout(() => {
           visualizationRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -608,7 +608,7 @@ export default function HomePage() {
 
       // Get detailed analysis if available
       const detailedAnalysis = (window as any).detailedAnalysis;
-      
+
       let contextString = "No audio analyzed yet";
       if (insights && detailedAnalysis) {
         contextString = `Audio Analysis Report:
@@ -666,7 +666,7 @@ QUALITY INDICATORS:
 - Brightness Score: ${insights.brightnessScore}/100
 - Duration: ${insights.duration}`;
       }
-      
+
       const res = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -687,10 +687,10 @@ QUALITY INDICATORS:
           setIsChatLoading(false);
           return;
         }
-        
+
         // Add bot response message
         setChatMessages(prev => [...prev, { role: 'bot', text: data.message + "\n\nProcessing your audio now..." }]);
-        
+
         // Process audio with the parameters from Gemini
         const formData = new FormData();
         formData.append('audio', audioFile);
@@ -703,7 +703,7 @@ QUALITY INDICATORS:
           preview: false
         }));
 
-        const audioRes = await fetch('http://localhost:5000/api/process-audio', {
+        const audioRes = await fetch('http://localhost:5001/api/process-audio', {
           method: 'POST',
           body: formData,
           mode: 'cors'
@@ -712,14 +712,14 @@ QUALITY INDICATORS:
         if (!audioRes.ok) {
           throw new Error('Failed to apply modifications to audio');
         }
-        
+
         const audioBlob = await audioRes.blob();
         const audioUrl = URL.createObjectURL(audioBlob);
-        
+
         // Store modified audio
         setModifiedAudioUrl(audioUrl);
         setShowChatAudioPlayer(true);
-        
+
         // Update chat with success message
         setChatMessages(prev => {
           const messages = [...prev];
@@ -733,7 +733,7 @@ QUALITY INDICATORS:
 
     } catch (e) {
       console.error("Chat error", e);
-      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error processing your request. Make sure the Python backend is running on localhost:5000." }]);
+      setChatMessages(prev => [...prev, { role: 'bot', text: "Sorry, I encountered an error processing your request. Make sure the Python backend is running on localhost:5001." }]);
     } finally {
       setIsChatLoading(false);
     }
@@ -774,7 +774,7 @@ QUALITY INDICATORS:
       setLoadingStep('Sending audio to server...');
       setLoadingProgress(30);
 
-      const fetchPromise = fetch('http://localhost:5000/api/process-audio', {
+      const fetchPromise = fetch('http://localhost:5001/api/process-audio', {
         method: 'POST',
         body: formData,
         mode: 'cors'
@@ -853,7 +853,7 @@ QUALITY INDICATORS:
       setLoadingStep('Processing preview...');
       setLoadingProgress(50);
 
-      const fetchPromise = fetch('http://localhost:5000/api/process-audio', {
+      const fetchPromise = fetch('http://localhost:5001/api/process-audio', {
         method: 'POST',
         body: formData,
         mode: 'cors'
@@ -877,7 +877,7 @@ QUALITY INDICATORS:
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       setLoadingProgress(100);
-      
+
       // Set up audio player
       setPreviewAudioUrl(url);
       setShowAudioPlayer(true);
@@ -1019,7 +1019,7 @@ QUALITY INDICATORS:
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const bars = 100;
         const barWidth = canvas.width / bars;
-        
+
         for (let i = 0; i < bars; i++) {
           const barHeight = Math.random() * canvas.height * 0.6;
           const x = i * barWidth;
@@ -1247,18 +1247,18 @@ QUALITY INDICATORS:
                   <div className="audio-player-container">
                     <h4 className="player-title">🎵 Preview Player</h4>
                     <div className="soundcloud-player">
-                      <button 
-                        className="play-pause-btn-main" 
+                      <button
+                        className="play-pause-btn-main"
                         onClick={togglePlayPause}
                       >
                         {isPlaying ? (
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-                            <rect x="6" y="4" width="4" height="16" rx="1"/>
-                            <rect x="14" y="4" width="4" height="16" rx="1"/>
+                            <rect x="6" y="4" width="4" height="16" rx="1" />
+                            <rect x="14" y="4" width="4" height="16" rx="1" />
                           </svg>
                         ) : (
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-                            <path d="M8 5v14l11-7z"/>
+                            <path d="M8 5v14l11-7z" />
                           </svg>
                         )}
                       </button>
@@ -1278,8 +1278,8 @@ QUALITY INDICATORS:
                         <span id="duration-time">0:00</span>
                       </div>
                     </div>
-                    <audio 
-                      src={previewAudioUrl} 
+                    <audio
+                      src={previewAudioUrl}
                       className="hidden-audio"
                       autoPlay
                       onTimeUpdate={(e) => {
@@ -1323,10 +1323,10 @@ QUALITY INDICATORS:
 
           {insights && (
             <div className="chatbot-section">
-              <div 
+              <div
                 className="chatbot-container"
                 style={{
-                  '--chat-height': `${Math.min(850, Math.max(300, 300 + chatMessages.length * 50))}px`
+                  '--chat-height': `${Math.min(900, Math.max(500, 500 + chatMessages.length * 50))}px`
                 } as React.CSSProperties}
               >
                 {/* Clear Chat Button */}
@@ -1362,18 +1362,18 @@ QUALITY INDICATORS:
                   <div className="chat-audio-section">
                     <h4 className="chat-audio-title">Modified Audio</h4>
                     <div className="soundcloud-player-chat">
-                      <button 
+                      <button
                         className="play-pause-btn-chat"
                         onClick={toggleChatAudioPlayPause}
                       >
                         {isChatAudioPlaying ? (
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                            <rect x="6" y="4" width="4" height="16" rx="1"/>
-                            <rect x="14" y="4" width="4" height="16" rx="1"/>
+                            <rect x="6" y="4" width="4" height="16" rx="1" />
+                            <rect x="14" y="4" width="4" height="16" rx="1" />
                           </svg>
                         ) : (
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
-                            <path d="M8 5v14l11-7z"/>
+                            <path d="M8 5v14l11-7z" />
                           </svg>
                         )}
                       </button>
@@ -1394,20 +1394,20 @@ QUALITY INDICATORS:
                       </div>
                     </div>
                     <div className="chat-audio-controls">
-                      <button 
+                      <button
                         className="chat-audio-btn download-btn"
                         onClick={handleChatDownload}
                       >
                         Download Audio
                       </button>
-                      <button 
+                      <button
                         className="chat-audio-btn dataset-btn"
                         onClick={handleDownloadDataset}
                       >
                         Download Dataset
                       </button>
                     </div>
-                    <audio 
+                    <audio
                       src={modifiedAudioUrl}
                       className="hidden-audio"
                       autoPlay

@@ -224,4 +224,4 @@ if __name__ == '__main__':
     print("   - GET /health (health check)")
     print("\n🚀 Server running on http://localhost:5000")
     print("🔍 Debug mode: ON - detailed error logging enabled\n")
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=5001, debug=True, use_reloader=False)
